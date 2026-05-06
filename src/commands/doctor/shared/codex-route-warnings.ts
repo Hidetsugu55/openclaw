@@ -849,10 +849,8 @@ export async function maybeRepairCodexSessionRoutes(params: {
     if (staleSessionKeys.length === 0) {
       continue;
     }
-    const result = await updateSessionStore(
-      target.storePath,
-      (store) => repairCodexSessionStoreRoutes({ store, runtime }),
-      { skipMaintenance: true },
+    const result = await updateSessionStore(target.storePath, (store) =>
+      repairCodexSessionStoreRoutes({ store, runtime }),
     );
     if (!result.changed) {
       continue;
