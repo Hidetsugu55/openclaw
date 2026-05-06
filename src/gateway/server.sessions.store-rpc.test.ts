@@ -1,6 +1,10 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import { piSdkMock, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -16,18 +20,18 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const recent = now - 30_000;
   const stale = now - 15 * 60_000;
 
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    `${Array.from({ length: 10 })
-      .map((_, idx) => JSON.stringify({ role: "user", content: `line ${idx}` }))
-      .join("\n")}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(dir, "sess-group.jsonl"),
-    `${JSON.stringify({ role: "user", content: "group line 0" })}\n`,
-    "utf-8",
-  );
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-main",
+    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    events: Array.from({ length: 10 }, (_, idx) => ({ role: "user", content: `line ${idx}` })),
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-group",
+    transcriptPath: path.join(dir, "sess-group.jsonl"),
+    events: [{ role: "user", content: "group line 0" }],
+  });
 
   await writeSessionStore({
     entries: {
@@ -377,12 +381,9 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  const compactedLines = (await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"))
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0);
-  expect(compactedLines).toHaveLength(3);
-  const filesAfterCompact = await fs.readdir(dir);
-  expect(filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak."))).toBe(true);
+  expect(
+    loadSqliteSessionTranscriptEvents({ agentId: "main", sessionId: "sess-main" }),
+  ).toHaveLength(3);
 
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
     key: "agent:main:discord:group:dev",
@@ -396,8 +397,9 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(
     listAfterDelete.payload?.sessions.some((s) => s.key === "agent:main:discord:group:dev"),
   ).toBe(false);
-  const filesAfterDelete = await fs.readdir(dir);
-  expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
+  expect(loadSqliteSessionTranscriptEvents({ agentId: "main", sessionId: "sess-group" })).toEqual(
+    [],
+  );
 
   const reset = await directSessionReq<{
     ok: true;
@@ -417,14 +419,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.lastAccountId).toBe("work");
   expect(reset.payload?.entry.lastThreadId).toBe("1737500000.123456");
-  const storeAfterReset = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { lastAccountId?: string; lastThreadId?: string | number }
-  >;
+  const storeAfterReset = loadSessionStore(storePath);
   expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
   expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
-  const filesAfterReset = await fs.readdir(dir);
-  expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
+  expect(loadSqliteSessionTranscriptEvents({ agentId: "main", sessionId: "sess-main" })).toEqual(
+    [],
+  );
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

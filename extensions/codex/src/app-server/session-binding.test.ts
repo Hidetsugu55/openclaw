@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
-  resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
 } from "./session-binding.js";
 
 let tempDir: string;
+let previousStateDir: string | undefined;
 
 const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"> = {
   authProfileStore: {
@@ -30,13 +30,20 @@ const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"
 describe("codex app-server session binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempDir;
   });
 
   afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("round-trips the thread binding beside the PI session file", async () => {
+  it("round-trips the thread binding through SQLite", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
@@ -57,7 +64,6 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
     });
-    await expect(fs.stat(resolveCodexAppServerBindingPath(sessionFile))).resolves.toBeTruthy();
   });
 
   it("does not persist public OpenAI as the provider for Codex-native auth bindings", async () => {
@@ -74,38 +80,13 @@ describe("codex app-server session binding", () => {
       nativeAuthLookup,
     );
 
-    const raw = await fs.readFile(resolveCodexAppServerBindingPath(sessionFile), "utf8");
     const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
 
-    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding).toMatchObject({
       threadId: "thread-123",
       authProfileId: "work",
       model: "gpt-5.4-mini",
     });
-    expect(binding?.modelProvider).toBeUndefined();
-  });
-
-  it("normalizes older Codex-native bindings that stored public OpenAI provider", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    await fs.writeFile(
-      resolveCodexAppServerBindingPath(sessionFile),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        sessionFile,
-        cwd: tempDir,
-        authProfileId: "work",
-        model: "gpt-5.4-mini",
-        modelProvider: "openai",
-        createdAt: "2026-05-03T00:00:00.000Z",
-        updatedAt: "2026-05-03T00:00:00.000Z",
-      })}\n`,
-    );
-
-    const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
-
-    expect(binding?.authProfileId).toBe("work");
     expect(binding?.modelProvider).toBeUndefined();
   });
 

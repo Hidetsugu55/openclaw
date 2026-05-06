@@ -117,8 +117,13 @@ export async function compactEmbeddedPiSession(
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
         checkpointSnapshot = engineOwnsCompaction
           ? await captureCompactionCheckpointSnapshotAsync({
+              agentId: sessionAgentId,
               sessionFile: params.sessionFile,
             })
           : null;
@@ -126,10 +131,6 @@ export async function compactEmbeddedPiSession(
           ? asCompactionHookRunner(getGlobalHookRunner())
           : null;
         const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
-        const { sessionAgentId } = resolveSessionAgentIds({
-          sessionKey: params.sessionKey,
-          config: params.config,
-        });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {
           sessionId: params.sessionId,

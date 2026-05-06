@@ -86,7 +86,6 @@ describe("sessionsCleanupCommand", () => {
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
       maxEntries: 500,
-      resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
       maxDiskBytes: null,
       highWaterBytes: null,
     });

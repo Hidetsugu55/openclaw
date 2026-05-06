@@ -26,7 +26,6 @@ describe("SessionSchema maintenance extensions", () => {
     expect(() =>
       SessionSchema.parse({
         maintenance: {
-          resetArchiveRetention: "14d",
           maxDiskBytes: "500mb",
           highWaterBytes: "350mb",
         },
@@ -34,25 +33,7 @@ describe("SessionSchema maintenance extensions", () => {
     ).not.toThrow();
   });
 
-  it("accepts disabling reset archive cleanup", () => {
-    expect(() =>
-      SessionSchema.parse({
-        maintenance: {
-          resetArchiveRetention: false,
-        },
-      }),
-    ).not.toThrow();
-  });
-
   it("rejects invalid maintenance extension values", () => {
-    expect(() =>
-      SessionSchema.parse({
-        maintenance: {
-          resetArchiveRetention: "never",
-        },
-      }),
-    ).toThrow(/resetArchiveRetention|duration/i);
-
     expect(() =>
       SessionSchema.parse({
         maintenance: {
