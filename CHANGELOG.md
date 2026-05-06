@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.
 - Gateway/sessions: fast-path already-qualified model refs while building session-list rows so `openclaw sessions` and Control UI session lists avoid heavyweight model resolution on large stores. (#77902) Thanks @ragesaq.
 - Gateway/sessions: remove the automatic cron session reaper and retired `cron.sessionRetention`; use `openclaw sessions cleanup` for session-row maintenance while cron run-log pruning remains under `cron.runLog`.
+- Cron/state: store runtime schedule state and run history in the shared SQLite state database; `openclaw doctor --fix` imports legacy `jobs-state.json` and `cron/runs/*.jsonl` files.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - Sessions CLI: show the selected agent runtime in the `openclaw sessions` table so terminal output matches the runtime visibility already present in JSON/status surfaces. Thanks @vincentkoc.
 - Talk/voice: unify realtime relay, transcription relay, managed-room handoff, Voice Call, Google Meet, VoiceClaw, and native clients around a shared Talk session controller and add the Gateway-managed `talk.session.*` RPC surface.
