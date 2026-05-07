@@ -8,7 +8,7 @@ const ORIGINAL_SKIP_MISSING = process.env.OPENCLAW_A2UI_SKIP_MISSING;
 const ORIGINAL_SPARSE_PROFILE = process.env.OPENCLAW_SPARSE_PROFILE;
 
 async function withTempDir(prefix: string, run: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
   try {
     await run(dir);
   } finally {
