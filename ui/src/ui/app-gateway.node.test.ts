@@ -424,7 +424,7 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
-  it("routes exec approval requested events with command explanation highlights", () => {
+  it("routes exec approval requested events with command spans", () => {
     const { host, client } = connectHostGateway();
 
     client.emitEvent({
@@ -434,10 +434,7 @@ describe("connectGateway", () => {
         request: {
           command: 'ls | grep "stuff" | python -c \'print("hi")\'',
           host: "gateway",
-          commandExplanationLines: [],
-          commandExplanationHighlights: [
-            { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
-          ],
+          commandSpans: [{ startIndex: 20, endIndex: 26 }],
         },
         createdAtMs: Date.now(),
         expiresAtMs: Date.now() + 60_000,
@@ -445,9 +442,8 @@ describe("connectGateway", () => {
     });
 
     expect(host.execApprovalQueue).toHaveLength(1);
-    expect(host.execApprovalQueue[0]?.request.commandExplanationLines).toBeUndefined();
-    expect(host.execApprovalQueue[0]?.request.commandExplanationHighlights).toEqual([
-      { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
+    expect(host.execApprovalQueue[0]?.request.commandSpans).toEqual([
+      { startIndex: 20, endIndex: 26 },
     ]);
   });
 
