@@ -46,6 +46,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "json5",
   "lit",
   "linkedom",
+  "lit",
   "openclaw",
   "pdfjs-dist",
 ] as const;
