@@ -342,3 +342,38 @@ describe("createOpenClawTools cron context wiring", () => {
     });
   });
 });
+
+describe("createOpenClawTools embedded message tool wiring", () => {
+  it("keeps message unavailable by default in embedded mode", async () => {
+    const { setEmbeddedMode } = await import("../infra/embedded-mode.js");
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+
+    setEmbeddedMode(true);
+    try {
+      const tools = createOpenClawTools({
+        disablePluginTools: true,
+      });
+
+      expect(tools.some((tool) => tool.name === "message")).toBe(false);
+    } finally {
+      setEmbeddedMode(false);
+    }
+  });
+
+  it("keeps message available in embedded mode when source delivery requires it", async () => {
+    const { setEmbeddedMode } = await import("../infra/embedded-mode.js");
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+
+    setEmbeddedMode(true);
+    try {
+      const tools = createOpenClawTools({
+        disablePluginTools: true,
+        forceMessageTool: true,
+      });
+
+      expect(tools.some((tool) => tool.name === "message")).toBe(true);
+    } finally {
+      setEmbeddedMode(false);
+    }
+  });
+});

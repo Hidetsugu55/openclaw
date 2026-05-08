@@ -819,6 +819,35 @@ async function refreshGatewayServiceEnv(params: {
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
 }
 
+async function refreshNodeServiceEnv(params: {
+  result: UpdateRunResult;
+  jsonMode: boolean;
+  invocationCwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const args = ["node", "install", "--force"];
+  if (params.jsonMode) {
+    args.push("--json");
+  }
+
+  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+  if (entrypoint) {
+    const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
+      cwd: params.result.root,
+      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+    });
+    if (res.code === 0) {
+      return;
+    }
+    throw new Error(
+      `updated node install refresh failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
+    );
+  }
+
+  throw new Error(`updated install entrypoint not found under ${params.result.root ?? "unknown"}`);
+}
+
 async function runUpdatedInstallGatewayRestart(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
@@ -846,6 +875,36 @@ async function runUpdatedInstallGatewayRestart(params: {
   }
   throw new Error(
     `updated install restart failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
+  );
+}
+
+async function runUpdatedInstallNodeRestart(params: {
+  result: UpdateRunResult;
+  jsonMode: boolean;
+  invocationCwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+  if (!entrypoint) {
+    throw new Error(
+      `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
+    );
+  }
+
+  const args = ["node", "restart"];
+  if (params.jsonMode) {
+    args.push("--json");
+  }
+  const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
+    cwd: params.result.root,
+    env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+    timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+  });
+  if (res.code === 0) {
+    return true;
+  }
+  throw new Error(
+    `updated node restart failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
   );
 }
 
@@ -1524,6 +1583,12 @@ async function maybeRestartService(params: {
             invocationCwd: params.invocationCwd,
             env: params.serviceEnv,
           });
+          await refreshNodeServiceEnv({
+            result: params.result,
+            jsonMode: Boolean(params.opts.json),
+            invocationCwd: params.invocationCwd,
+            env: params.serviceEnv,
+          });
         } catch (err) {
           // Always log the refresh failure so callers can detect it (issue #56772).
           // Previously this was silently suppressed in --json mode, hiding the root
@@ -1549,6 +1614,14 @@ async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
         });
+        if (restarted) {
+          await runUpdatedInstallNodeRestart({
+            result: params.result,
+            jsonMode: Boolean(params.opts.json),
+            invocationCwd: params.invocationCwd,
+            env: params.serviceEnv,
+          });
+        }
       } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })) {
         restarted = await runDaemonRestart();
       } else if (!params.opts.json) {

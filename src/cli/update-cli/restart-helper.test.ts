@@ -130,7 +130,11 @@ exit 0
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("systemctl --user restart 'openclaw-gateway.service'");
+      expect(content).toContain("if restart_unit 'openclaw-gateway.service'; then");
+      expect(content).toContain(
+        "printf '[%s] openclaw restart node attempt source=update target=%s\\n'",
+      );
+      expect(content).toContain("'openclaw-node.service' >&2");
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
@@ -142,7 +146,7 @@ exit 0
         OPENCLAW_PROFILE: "default",
         OPENCLAW_SYSTEMD_UNIT: "custom-gateway",
       });
-      expect(content).toContain("systemctl --user restart 'custom-gateway.service'");
+      expect(content).toContain("if restart_unit 'custom-gateway.service'; then");
       await cleanupScript(scriptPath);
     });
 
@@ -179,7 +183,7 @@ exit 1
       const calls = await fs.readFile(callsPath, "utf-8");
 
       expect(result.code).toBe(78);
-      expect(result.stderr).toContain("system-scoped openclaw gateway unit detected");
+      expect(result.stderr).toContain("system-scoped openclaw service detected");
       expect(result.stderr).toContain("sudo systemctl restart openclaw-gateway.service");
       expect(calls).toContain("--user is-active --quiet openclaw-gateway.service");
       expect(calls).toContain("is-active --quiet openclaw-gateway.service");
@@ -196,6 +200,7 @@ exit 1
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.node'");
       // Should clear disabled state and fall back to bootstrap when kickstart fails.
       expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
@@ -370,11 +375,15 @@ exit 0
       expect(content).toContain("function Get-OpenClawScheduledTaskState");
       expect(content).toContain("function Invoke-OpenClawStartupLauncher");
       expect(content).toContain("Get-ScheduledTask -TaskName $TaskName");
+      expect(content).toContain("$nodeTaskName = 'OpenClaw Node'");
       expect(content).toContain("openclaw restart skipped schtasks end");
       expect(content).toContain(
         '$launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"',
       );
       expect(content).toContain("openclaw restart launched startup fallback");
+      expect(content).toContain(
+        'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $nodeTaskName) -TimeoutSeconds 30',
+      );
       expectWindowsRestartWaitOrdering(content);
       expect(content).toContain('del "%~f0" >nul 2>&1');
       await cleanupScript(scriptPath);

@@ -8,6 +8,9 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
+  resolveNodeLaunchAgentLabel,
+  resolveNodeSystemdServiceName,
+  resolveNodeWindowsTaskName,
 } from "../../daemon/constants.js";
 import {
   renderPosixRestartLogSetup,
@@ -50,12 +53,36 @@ function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
   return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
 }
 
+function resolveNodeLaunchdLabel(env: NodeJS.ProcessEnv): string {
+  const override = normalizeOptionalString(env.OPENCLAW_NODE_LAUNCHD_LABEL);
+  if (override) {
+    return override;
+  }
+  return resolveNodeLaunchAgentLabel();
+}
+
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
   if (override) {
     return override;
   }
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
+function resolveNodeWindowsTask(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_NODE_WINDOWS_TASK_NAME?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveNodeWindowsTaskName();
+}
+
+function resolveNodeSystemdUnit(env: NodeJS.ProcessEnv): string {
+  const override = normalizeOptionalString(env.OPENCLAW_NODE_SYSTEMD_UNIT);
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveNodeSystemdServiceName()}.service`;
 }
 
 /**
@@ -78,7 +105,9 @@ export async function prepareRestartScript(
   try {
     if (platform === "linux") {
       const unitName = resolveSystemdUnit(env);
+      const nodeUnitName = resolveNodeSystemdUnit(env);
       const escaped = shellEscape(unitName);
+      const escapedNode = shellEscape(nodeUnitName);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
@@ -88,21 +117,32 @@ sleep 1
 exec 3>&2
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
-if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
-  if systemctl --user restart '${escaped}'; then
-    status=0
-    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
-  else
-    status=$?
-    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+restart_unit() {
+  target="$1"
+  if systemctl --user is-active --quiet "$target" || systemctl --user is-enabled --quiet "$target"; then
+    if systemctl --user restart "$target"; then
+      return 0
+    fi
+    return $?
   fi
-elif systemctl is-active --quiet '${escaped}' || systemctl is-enabled --quiet '${escaped}'; then
-  status=78
-  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
-  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&3 2>/dev/null || true
+  if systemctl is-active --quiet "$target" || systemctl is-enabled --quiet "$target"; then
+    printf '[%s] system-scoped openclaw service detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" "$target" >&2
+    printf '[%s] system-scoped openclaw service detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" "$target" >&3 2>/dev/null || true
+    return 78
+  fi
+  if systemctl --user restart "$target"; then
+    return 0
+  fi
+  return $?
+}
+if restart_unit '${escaped}'; then
+  status=0
 else
-  if systemctl --user restart '${escaped}'; then
-    status=0
+  status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw restart node attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escapedNode}' >&2
+  if restart_unit '${escapedNode}'; then
     printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
   else
     status=$?
@@ -116,7 +156,9 @@ exit "$status"
 `;
     } else if (platform === "darwin") {
       const label = resolveLaunchdLabel(env);
+      const nodeLabel = resolveNodeLaunchdLabel(env);
       const escaped = shellEscape(label);
+      const escapedNode = shellEscape(nodeLabel);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
       // Resolve HOME at generation time via env/process.env to match launchd.ts,
@@ -152,6 +194,12 @@ if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   fi
 fi
 if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw restart node attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(nodeLabel)}' >&2
+  if ! launchctl kickstart -k 'gui/${uid}/${escapedNode}'; then
+    status=$?
+  fi
+fi
+if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
 else
   printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
@@ -162,7 +210,11 @@ exit "$status"
 `;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);
+      const nodeTaskName = resolveNodeWindowsTask(env);
       if (!isWindowsTaskNameSafe(taskName)) {
+        return null;
+      }
+      if (!isWindowsTaskNameSafe(nodeTaskName)) {
         return null;
       }
       const port =
@@ -320,6 +372,7 @@ function Invoke-OpenClawStartupLauncher {
 }
 
 $taskName = ${quotedTaskName}
+$nodeTaskName = ${powerShellSingleQuote(nodeTaskName)}
 $port = ${port}
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
 
@@ -357,6 +410,10 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30
 if ($status -ne 0) {
   $status = Invoke-OpenClawStartupLauncher
+}
+if ($status -eq 0) {
+  Write-RestartLog "openclaw restart node attempt source=update target=$nodeTaskName"
+  $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $nodeTaskName) -TimeoutSeconds 30
 }
 if ($status -eq 0) {
   Write-RestartLog "openclaw restart done source=update"

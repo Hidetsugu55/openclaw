@@ -744,6 +744,7 @@ export function createOpenClawCodingTools(options?: {
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           disableMessageTool: options?.disableMessageTool,
+          forceMessageTool: options?.forceMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
           wrapBeforeToolCallHook: false,

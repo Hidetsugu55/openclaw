@@ -119,6 +119,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** If true, keep the message tool available even in embedded runs. */
+    forceMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -351,7 +353,7 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
-    ...(!embedded && messageTool ? [messageTool] : []),
+    ...((!embedded || options?.forceMessageTool) && messageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,

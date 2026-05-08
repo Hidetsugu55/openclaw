@@ -1019,8 +1019,11 @@ export async function runEmbeddedAttempt(
       workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
     }
     if (isEmbeddedMode()) {
+      const gatewayDependentToolsUnavailable = params.forceMessageTool
+        ? "canvas, nodes, cron, sessions_send, sessions_spawn, gateway"
+        : "canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway";
       workspaceNotes.push(
-        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
+        `Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (${gatewayDependentToolsUnavailable}) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.`,
       );
     }
 
