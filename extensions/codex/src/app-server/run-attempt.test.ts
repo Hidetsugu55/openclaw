@@ -73,6 +73,16 @@ function createCodexRuntimePlanFixture(): NonNullable<EmbeddedRunAttemptParams["
   } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
+function createCodexCodingGroupMessageToolConfig(): NonNullable<
+  EmbeddedRunAttemptParams["config"]
+> {
+  return {
+    agents: { defaults: { agentRuntime: { id: "codex" } } },
+    tools: { profile: "coding" },
+    messages: { groupChat: { visibleReplies: "message_tool" } },
+  };
+}
+
 function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -523,6 +533,97 @@ describe("runCodexAppServerAttempt", () => {
 
     params.sourceReplyDeliveryMode = "automatic";
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("forces the message dynamic tool for configured group/channel visible replies", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "automatic";
+    params.config = createCodexCodingGroupMessageToolConfig();
+    params.sessionKey = "agent:main:discord:channel:1491697090458292415";
+    params.messageChannel = "discord";
+    params.groupId = "channel:1491697090458292415";
+
+    expect(__testing.shouldForceMessageTool(params)).toBe(true);
+
+    params.sessionKey = "agent:main:discord:direct:1490529714870157373";
+    params.groupId = undefined;
+    expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("includes message in Codex dynamic tools for configured Discord group/channel coding turns", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.sourceReplyDeliveryMode = "automatic";
+    params.config = createCodexCodingGroupMessageToolConfig();
+    params.sessionKey = "agent:main:discord:channel:1491697090458292415";
+    params.messageChannel = "discord";
+    params.groupId = "channel:1491697090458292415";
+    const createTools = vi.fn((options?: { forceMessageTool?: boolean }) =>
+      options?.forceMessageTool ? [createMessageDynamicTool("Send messages.") as never] : [],
+    );
+    __testing.setOpenClawCodingToolsFactoryForTests(createTools as never);
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey,
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(createTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceMessageTool: true,
+        messageProvider: "discord",
+      }),
+    );
+    expect(tools.map((tool) => tool.name)).toContain("message");
+  });
+
+  it("keeps forced message in real Codex dynamic tools after policy filters", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.sourceReplyDeliveryMode = "automatic";
+    params.config = {
+      ...createCodexCodingGroupMessageToolConfig(),
+      tools: {
+        profile: "coding",
+        allow: [
+          "sessions_list",
+          "sessions_history",
+          "sessions_send",
+          "sessions_spawn",
+          "sessions_yield",
+          "subagents",
+          "session_status",
+          "image",
+        ],
+      },
+    };
+    params.sessionKey = "agent:main:discord:channel:1491697090458292415";
+    params.messageChannel = "discord";
+    params.groupId = "channel:1491697090458292415";
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey,
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("message");
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {

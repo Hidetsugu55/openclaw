@@ -675,6 +675,27 @@ describe("createOpenClawCodingTools", () => {
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
 
+  it("keeps forced message available after allowlist policy filters", () => {
+    const restrictedCodingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding", allow: ["session_status"] } },
+      forceMessageTool: true,
+    });
+    expect(restrictedCodingTools.some((tool) => tool.name === "message")).toBe(true);
+
+    const disabledTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding", allow: ["session_status"] } },
+      forceMessageTool: true,
+      disableMessageTool: true,
+    });
+    expect(disabledTools.some((tool) => tool.name === "message")).toBe(false);
+
+    const deniedTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding", allow: ["session_status"], deny: ["message"] } },
+      forceMessageTool: true,
+    });
+    expect(deniedTools.some((tool) => tool.name === "message")).toBe(false);
+  });
+
   it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
     const codingTools = createOpenClawCodingTools({
       config: { tools: { profile: "coding" } },

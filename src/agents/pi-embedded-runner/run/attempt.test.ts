@@ -29,6 +29,10 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import {
+  isGroupOrChannelSource,
+  resolveEffectiveForceMessageTool,
+} from "./attempt.message-tool-policy.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 type FakeWrappedStream = {
@@ -79,6 +83,71 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       memoryFlushWritePath: "memory/log.md",
       runtimeToolAllowlist: ["memory_search", "memory_get"],
     });
+  });
+});
+
+describe("resolveEffectiveForceMessageTool", () => {
+  it("forces the message tool for group/channel message_tool visibility", () => {
+    expect(
+      resolveEffectiveForceMessageTool({
+        config: {
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+        } as OpenClawConfig,
+        groupId: "discord-channel-id",
+      } as Parameters<typeof resolveEffectiveForceMessageTool>[0]),
+    ).toBe(true);
+  });
+
+  it("does not force the message tool for direct chats with group-only visibility config", () => {
+    expect(
+      resolveEffectiveForceMessageTool({
+        config: {
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:discord:direct:1490529714870157373",
+        messageTo: "discord:direct:1490529714870157373",
+      } as Parameters<typeof resolveEffectiveForceMessageTool>[0]),
+    ).toBe(false);
+  });
+
+  it("preserves explicit forceMessageTool overrides", () => {
+    expect(
+      resolveEffectiveForceMessageTool({
+        forceMessageTool: true,
+      } as Parameters<typeof resolveEffectiveForceMessageTool>[0]),
+    ).toBe(true);
+  });
+
+  it("forces the message tool for message_tool_only source reply delivery", () => {
+    expect(
+      resolveEffectiveForceMessageTool({
+        sourceReplyDeliveryMode: "message_tool_only",
+      } as Parameters<typeof resolveEffectiveForceMessageTool>[0]),
+    ).toBe(true);
+  });
+});
+
+describe("isGroupOrChannelSource", () => {
+  it("detects group/channel turns from routing metadata", () => {
+    expect(
+      isGroupOrChannelSource({
+        sessionKey: "agent:main:discord:channel:1491697090458292415",
+      } as Parameters<typeof isGroupOrChannelSource>[0]),
+    ).toBe(true);
+    expect(
+      isGroupOrChannelSource({
+        messageTo: "discord:group:ops-room",
+      } as Parameters<typeof isGroupOrChannelSource>[0]),
+    ).toBe(true);
+  });
+
+  it("ignores direct turns", () => {
+    expect(
+      isGroupOrChannelSource({
+        sessionKey: "agent:main:discord:direct:1490529714870157373",
+        messageTo: "discord:direct:1490529714870157373",
+      } as Parameters<typeof isGroupOrChannelSource>[0]),
+    ).toBe(false);
   });
 });
 
@@ -173,7 +242,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
     expect(output[0]?.content).toEqual([
       {

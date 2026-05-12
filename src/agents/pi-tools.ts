@@ -829,11 +829,28 @@ export function createOpenClawCodingTools(options?: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
+  const policyFiltered = [...subagentFiltered];
+  const explicitlyDeniedToolNames = new Set(
+    pluginToolDenylist.map((toolName) => normalizeToolName(toolName)),
+  );
+  if (
+    options?.forceMessageTool === true &&
+    options.disableMessageTool !== true &&
+    !explicitlyDeniedToolNames.has("message") &&
+    !policyFiltered.some((tool) => normalizeToolName(tool.name) === "message")
+  ) {
+    const forcedMessageTool = toolsByAuthorization.find(
+      (tool) => normalizeToolName(tool.name) === "message",
+    );
+    if (forcedMessageTool) {
+      policyFiltered.push(forcedMessageTool);
+    }
+  }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = policyFiltered.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,

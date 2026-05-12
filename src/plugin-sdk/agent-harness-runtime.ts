@@ -97,6 +97,10 @@ export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
 export {
+  isGroupOrChannelSource,
+  resolveEffectiveForceMessageTool,
+} from "../agents/pi-embedded-runner/run/attempt.message-tool-policy.js";
+export {
   abortEmbeddedPiRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   queueEmbeddedPiMessage as queueAgentHarnessMessage,

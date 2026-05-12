@@ -308,6 +308,7 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+import { resolveEffectiveForceMessageTool } from "./attempt.message-tool-policy.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
@@ -826,6 +827,19 @@ export async function runEmbeddedAttempt(
       isRawModelRun,
       toolsAllow: params.toolsAllow,
     });
+    const effectiveForceMessageTool = resolveEffectiveForceMessageTool(params);
+    console.log("pi embedded message tool policy", {
+      sessionKey: params.sessionKey,
+      messageTo: params.messageTo,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      visibleReplies: params.config?.messages?.groupChat?.visibleReplies,
+      disableMessageTool: params.disableMessageTool,
+      forceMessageTool: params.forceMessageTool,
+      effectiveForceMessageTool,
+    });
     const toolsRaw = !toolConstructionPlan.constructTools
       ? []
       : (() => {
@@ -892,7 +906,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
+            forceMessageTool: effectiveForceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
             authProfileStore: params.authProfileStore,
@@ -1019,7 +1033,7 @@ export async function runEmbeddedAttempt(
       workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
     }
     if (isEmbeddedMode()) {
-      const gatewayDependentToolsUnavailable = params.forceMessageTool
+      const gatewayDependentToolsUnavailable = effectiveForceMessageTool
         ? "canvas, nodes, cron, sessions_send, sessions_spawn, gateway"
         : "canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway";
       workspaceNotes.push(

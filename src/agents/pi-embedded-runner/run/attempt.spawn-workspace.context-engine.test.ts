@@ -355,6 +355,103 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("bootstrapMaxChars");
   });
 
+  it("includes the message tool for Codex coding Discord channel turns with group message_tool visibility", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce((options?: unknown) => {
+      const forceMessageTool =
+        typeof options === "object" &&
+        options !== null &&
+        "forceMessageTool" in options &&
+        options.forceMessageTool === true;
+      return forceMessageTool ? [{ name: "message", execute: async () => "" }] : [];
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:channel:1491697090458292415",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        disableMessageTool: false,
+        messageChannel: "discord",
+        provider: "openai-codex",
+        modelId: "gpt-5.4-codex",
+        model: {
+          provider: "openai-codex",
+          api: "responses",
+          compat: {},
+          contextWindow: 8192,
+          input: ["text"],
+        } as never,
+        config: {
+          agents: { defaults: { agentRuntime: { id: "codex" } } },
+          tools: { profile: "coding" },
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+        } as OpenClawConfig,
+        groupId: "1491697090458292415",
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceMessageTool: true,
+        messageProvider: "discord",
+      }),
+    );
+    expect(hoisted.createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customTools: expect.arrayContaining([expect.objectContaining({ name: "message" })]),
+      }),
+    );
+  });
+
+  it("does not include the message tool for direct chats when only group visibility is message_tool", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce((options?: unknown) => {
+      const forceMessageTool =
+        typeof options === "object" &&
+        options !== null &&
+        "forceMessageTool" in options &&
+        options.forceMessageTool === true;
+      return forceMessageTool ? [{ name: "message", execute: async () => "" }] : [];
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:direct:1490529714870157373",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        disableMessageTool: false,
+        messageChannel: "discord",
+        provider: "openai-codex",
+        modelId: "gpt-5.4-codex",
+        model: {
+          provider: "openai-codex",
+          api: "responses",
+          compat: {},
+          contextWindow: 8192,
+          input: ["text"],
+        } as never,
+        config: {
+          agents: { defaults: { agentRuntime: { id: "codex" } } },
+          tools: { profile: "coding" },
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceMessageTool: false,
+        messageProvider: "discord",
+      }),
+    );
+    expect(hoisted.createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customTools: expect.not.arrayContaining([expect.objectContaining({ name: "message" })]),
+      }),
+    );
+  });
+
   it("preserves bootstrap system context when system prompt override is configured", async () => {
     const seen: { prompt?: string; messages?: unknown[] } = {};
     hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValueOnce(true);

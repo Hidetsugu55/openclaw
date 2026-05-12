@@ -18,6 +18,7 @@ import {
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
+  resolveEffectiveForceMessageTool,
   resolveModelAuthMode,
   resolveSandboxContext,
   resolveSessionAgentIds,
@@ -1611,6 +1612,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     openClawCodingToolsFactoryForTests ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
+  const effectiveForceMessageTool = resolveEffectiveForceMessageTool(params);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1665,7 +1667,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
-    forceMessageTool: shouldForceMessageTool(params),
+    forceMessageTool: effectiveForceMessageTool,
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1707,10 +1709,6 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
     toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
   );
   return tools.filter((tool) => allowSet.has(normalizeCodexDynamicToolName(tool.name)));
-}
-
-function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
-  return params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
@@ -2135,7 +2133,7 @@ export const __testing = {
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   resolveOpenClawCodingToolsSessionKeys,
-  shouldForceMessageTool,
+  shouldForceMessageTool: resolveEffectiveForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;
   },
