@@ -1,0 +1,61 @@
+name: hide-build-verify
+
+# Hide individual operator CI — self-hosted runner on Mac Studio
+# Triggers on pushes to Hide's working branches only (not upstream-tracking branches).
+# Public-repo + self-hosted runner safety:
+#   - No pull_request trigger (prevents fork-PR exploitation)
+#   - Explicit branch allowlist
+on:
+  push:
+    branches:
+      - 'main'
+      - 'fix/**'
+      - 'feat/**'
+      - 'ci/**'
+      - 'codex/**'
+      - 'chore/**'
+  workflow_dispatch:
+
+concurrency:
+  group: hide-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: [self-hosted, openclaw-deploy]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup PATH
+        run: |
+          {
+            echo "/opt/homebrew/bin"
+            echo "/usr/local/bin"
+            echo "$HOME/Library/pnpm"
+            echo "$HOME/.local/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: Show versions
+        run: |
+          node --version || true
+          pnpm --version || true
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm build
+        run: pnpm build
+
+      - name: Log result
+        if: always()
+        run: |
+          mkdir -p "$HOME/.openclaw/Audit"
+          printf '%s\tCI %s\tref=%s\tsha=%s\trun=%s\n' \
+            "$(date -u +%FT%TZ)" "${{ job.status }}" \
+            "${{ github.ref }}" "${{ github.sha }}" \
+            "${{ github.run_id }}" \
+            >> "$HOME/.openclaw/Audit/ci-builds.log"
