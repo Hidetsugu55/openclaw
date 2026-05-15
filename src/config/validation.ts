@@ -218,7 +218,9 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       schema: schema as Record<string, unknown>,
       cacheKey: `raw-channel:${channelId}`,
       value: config.channels[channelId],
-      applyDefaults: false,
+      // Must be true: Zod's toJSONSchema marks .default() fields as required, so AJV
+      // must fill them in before validating or it rejects valid configs that omit them.
+      applyDefaults: true,
     });
     if (result.ok) {
       continue;

@@ -1691,6 +1691,56 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("dry-runs patch against existing discord implicit-default config with SecretRef token", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: { default: { source: "env" } },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-discord-implicit", {
+        gateway: { port: 18790 },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("dry-runs patch against existing telegram implicit-default config with SecretRef token", async () => {
+      const resolved = {
+        channels: {
+          telegram: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: { default: { source: "env" } },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-telegram-implicit", {
+        gateway: { port: 18790 },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("schema-validates SecretRef-only config patch operations", async () => {
       const resolved = {
         secrets: {
