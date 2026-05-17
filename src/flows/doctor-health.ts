@@ -6,20 +6,34 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
-async function runCoreHarnessJson(runtime: RuntimeEnv): Promise<void> {
+export async function runCoreHarnessJson(runtime: RuntimeEnv): Promise<void> {
   let exitCode: 0 | 1 | 2 | 3 = 2;
   try {
     const { readConfigFileSnapshot } = await import("../config/config.js");
     const { buildCoreHarnessSummary, resolveCoreHarnessJsonExitCode } =
       await import("../commands/doctor-core-harness.js");
     const { writeRuntimeJson } = await import("../runtime.js");
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    const { collectSourceInstallIssues } = await import("../commands/doctor-install.js");
+
     const snapshot = await readConfigFileSnapshot();
+    const packageRoot = await resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+    const sourceInstallIssues = collectSourceInstallIssues(packageRoot);
+
     const summary = buildCoreHarnessSummary({
       cfg: snapshot.runtimeConfig,
       configPath: snapshot.path,
       sourceConfigValid: snapshot.valid,
       configIssues: snapshot.issues,
       env: process.env,
+      startupIssues: {
+        packageRootResolved: packageRoot !== null,
+        sourceInstallIssues,
+      },
     });
     writeRuntimeJson(runtime, summary);
     exitCode = resolveCoreHarnessJsonExitCode({
