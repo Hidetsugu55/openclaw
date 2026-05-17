@@ -50,6 +50,25 @@ jobs:
       - name: pnpm build
         run: pnpm build
 
+      - name: Smoke test CLI launchers
+        # Catches the class of shim breakage logged in
+        # 2026-05-17-openclaw-shim-broken-pnpm-worktree.md: the global pnpm
+        # `openclaw` shim hard-coded a temp worktree path, and the failure was
+        # invisible to gateway / launchd which call `node dist/...` directly.
+        run: |
+          set -euo pipefail
+          # Direct entrypoint via the package bin script. Independent of any
+          # global pnpm shim or PATH-installed launcher.
+          node openclaw.mjs --version
+          # Resolved CLI via PATH. Only exercised when a launcher is actually
+          # installed; the upstream openclaw doctor will surface its own
+          # warning when this is absent, so we do not fail the build here.
+          if command -v openclaw >/dev/null 2>&1; then
+            openclaw --version
+          else
+            echo "openclaw not on PATH; skipping shim smoke (no launcher installed)"
+          fi
+
       - name: Log result
         if: always()
         run: |
