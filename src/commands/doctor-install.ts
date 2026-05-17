@@ -2,15 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../terminal/note.js";
 
-export function noteSourceInstallIssues(root: string | null) {
+export function collectSourceInstallIssues(root: string | null): string[] {
   if (!root) {
-    return;
+    return [];
   }
 
   const srcEntry = path.join(root, "src", "entry.ts");
   const workspaceMarker = path.join(root, "pnpm-workspace.yaml");
   if (!fs.existsSync(workspaceMarker) || !fs.existsSync(srcEntry)) {
-    return;
+    return [];
   }
 
   const warnings: string[] = [];
@@ -34,6 +34,11 @@ export function noteSourceInstallIssues(root: string | null) {
     warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
+  return warnings;
+}
+
+export function noteSourceInstallIssues(root: string | null) {
+  const warnings = collectSourceInstallIssues(root);
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Install");
   }

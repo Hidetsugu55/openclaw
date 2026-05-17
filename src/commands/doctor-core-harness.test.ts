@@ -84,6 +84,48 @@ describe("Core Harness doctor summary", () => {
     });
   });
 
+  it("looks up wrapper under OS user home, not OPENCLAW_HOME, when they differ", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {
+        commands: { ownerAllowFrom: ["discord:123"] },
+      } as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: {
+        HOME: "/Users/hide_aibo",
+        OPENCLAW_HOME: "/Users/hide_aibo/.openclaw",
+      } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      existsSync: (candidate) => candidate === "/Users/hide_aibo/.local/bin/oc-wrapper-lib",
+      readFileSync: () => "openclaw-setup resolve_openclaw_home OPENCLAW_HOME",
+    });
+
+    expect(summary.effectiveHome).toMatchObject({
+      path: "/Users/hide_aibo/.openclaw",
+      source: "env",
+    });
+    expect(summary.wrappers).toEqual({
+      openclawSetupAlias: true,
+      homeResolver: true,
+    });
+  });
+
+  it("still honors explicit wrapperPath overrides for tests and tooling", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: {} as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      wrapperPath: "/explicit/path/oc-wrapper-lib",
+      existsSync: (candidate) => candidate === "/explicit/path/oc-wrapper-lib",
+      readFileSync: () => "openclaw-setup resolve_openclaw_home OPENCLAW_HOME",
+    });
+
+    expect(summary.wrappers).toEqual({
+      openclawSetupAlias: true,
+      homeResolver: true,
+    });
+  });
+
   it("tracks whether effective home came from OPENCLAW_HOME, USERPROFILE, or os.homedir", () => {
     expect(
       resolveCoreHarnessHome({
@@ -147,6 +189,49 @@ describe("Core Harness doctor summary", () => {
         "core-harness.sandbox-explain.resolver-followup",
       ]),
     );
+  });
+
+  it("surfaces startup integrity issues as warnings when provided", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: { commands: { ownerAllowFrom: ["discord:123"] } } as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+      startupIssues: {
+        packageRootResolved: false,
+        sourceInstallIssues: [
+          "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install so bundled plugins can load package-local dependencies.",
+        ],
+      },
+    });
+
+    const codes = summary.warnings.map((warning) => warning.code);
+    expect(codes).toContain("core-harness.startup.broken-shim");
+    expect(codes).toContain("core-harness.startup.broken-root");
+    const shim = summary.warnings.find((w) => w.code === "core-harness.startup.broken-shim");
+    expect(shim?.severity).toBe("error");
+    const root = summary.warnings.find((w) => w.code === "core-harness.startup.broken-root");
+    expect(root?.severity).toBe("warn");
+    expect(root?.what_to_do_now).toContain("pnpm install");
+  });
+
+  it("omits startup integrity warnings when none are reported", () => {
+    const summary = buildCoreHarnessSummary({
+      cfg: { commands: { ownerAllowFrom: ["discord:123"] } } as OpenClawConfig,
+      configPath: "/Users/hide_aibo/.openclaw/openclaw.json",
+      env: { HOME: "/Users/hide_aibo" } as NodeJS.ProcessEnv,
+      approvals: { version: 1 },
+      ...readWrapper("openclaw-setup resolve_openclaw_home OPENCLAW_HOME"),
+      startupIssues: {
+        packageRootResolved: true,
+        sourceInstallIssues: [],
+      },
+    });
+
+    const codes = summary.warnings.map((warning) => warning.code);
+    expect(codes).not.toContain("core-harness.startup.broken-shim");
+    expect(codes).not.toContain("core-harness.startup.broken-root");
   });
 
   it("emits a human-readable Core Harness Summary note", () => {

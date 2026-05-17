@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
-import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
+import { resolveEffectiveHomeDir, resolveOsHomeDir } from "../infra/home-dir.js";
 import { note } from "../terminal/note.js";
 
 const WRAPPER_LIB_RELATIVE_PATH = ".local/bin/oc-wrapper-lib";
@@ -192,10 +192,14 @@ function addWarning(
 ): void {
   warnings.push({
     ...warning,
-    safe_to_ignore_today:
-      warning.safe_to_ignore_today ?? (warning.severity === "info" ? true : false),
+    safe_to_ignore_today: warning.safe_to_ignore_today ?? warning.severity === "info",
   });
 }
+
+export type CoreHarnessStartupIssues = {
+  packageRootResolved: boolean;
+  sourceInstallIssues: string[];
+};
 
 export function buildCoreHarnessSummary(params: {
   cfg: OpenClawConfig;
@@ -207,11 +211,17 @@ export function buildCoreHarnessSummary(params: {
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: BufferEncoding) => string;
   wrapperPath?: string;
+  startupIssues?: CoreHarnessStartupIssues;
 }): CoreHarnessSummary {
   const env = params.env ?? process.env;
   const home = resolveCoreHarnessHome(env);
   const approvals = summarizeApprovals(params.approvals ?? loadExecApprovals());
-  const wrapperPath = params.wrapperPath ?? path.join(home.path, WRAPPER_LIB_RELATIVE_PATH);
+  // Wrapper lives under the OS user home, not OPENCLAW_HOME (which may point
+  // at a state-only directory like `~/.openclaw`). Fall back to the effective
+  // home only when HOME / USERPROFILE / os.homedir() are all unavailable
+  // (containerised or stripped environments), so we never lose detection.
+  const wrapperBase = resolveOsHomeDir(env) ?? home.path;
+  const wrapperPath = params.wrapperPath ?? path.join(wrapperBase, WRAPPER_LIB_RELATIVE_PATH);
   const wrappers = inspectWrapperCoverage({
     wrapperPath,
     existsSync: params.existsSync ?? fs.existsSync,
@@ -219,6 +229,27 @@ export function buildCoreHarnessSummary(params: {
   });
   const wildcardAllowFrom = collectAllowFromWildcards(params.cfg);
   const warnings: CoreHarnessWarning[] = [];
+
+  if (params.startupIssues && !params.startupIssues.packageRootResolved) {
+    addWarning(warnings, {
+      code: "core-harness.startup.broken-shim",
+      severity: "error",
+      category: "new",
+      summary: "OpenClaw package root could not be resolved from the running entrypoint.",
+      what_to_do_now:
+        "pnpm shim が壊れている可能性があります。`node $(pwd)/openclaw.mjs --version` で直接起動を確認し、必要なら `pnpm install -g .` をプロジェクトルートから再実行してください。",
+    });
+  }
+
+  if (params.startupIssues && params.startupIssues.sourceInstallIssues.length > 0) {
+    addWarning(warnings, {
+      code: "core-harness.startup.broken-root",
+      severity: "warn",
+      category: "new",
+      summary: "Source checkout install integrity issues detected during startup.",
+      what_to_do_now: `\`pnpm install\` を再実行してください: ${params.startupIssues.sourceInstallIssues.join(" / ")}`,
+    });
+  }
 
   if (
     home.isolatedProcessHome &&
