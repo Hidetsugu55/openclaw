@@ -169,6 +169,17 @@ export function resolveThreadParentSessionKey(
 
 export const DIRECT_SESSION_MARKERS: ReadonlySet<string> = new Set(["direct", "dm"]);
 const THREAD_SESSION_MARKERS: ReadonlySet<string> = new Set(["thread", "topic"]);
+// Tokens that may appear after a channel name but must never be accepted as an
+// accountId in the `<channel>:<accountId>:<direct|dm>:<peerId>` shape — they
+// would silently let group/channel/thread keys masquerade as direct keys.
+const RESERVED_SESSION_KEY_TOKENS: ReadonlySet<string> = new Set([
+  "channel",
+  "group",
+  "thread",
+  "topic",
+  "direct",
+  "dm",
+]);
 
 function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
   const peerId = normalizeOptionalString(parts[markerIndex + 1]);
@@ -206,7 +217,9 @@ export function isDirectSessionKey(sessionKey: string | undefined | null): boole
   if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
     return hasStrictDirectSessionTail(parts, 1);
   }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
+  return Boolean(normalizeOptionalString(parts[1])) &&
+    !RESERVED_SESSION_KEY_TOKENS.has(parts[1] ?? "") &&
+    DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
     ? hasStrictDirectSessionTail(parts, 2)
     : false;
 }
@@ -255,7 +268,8 @@ export function tryDeriveDirectRouteFromSessionKey(
   } else if (
     parts[2] != null &&
     DIRECT_SESSION_MARKERS.has(parts[2] ?? "") &&
-    Boolean(normalizeOptionalString(parts[1]))
+    Boolean(normalizeOptionalString(parts[1])) &&
+    !RESERVED_SESSION_KEY_TOKENS.has(parts[1] ?? "")
   ) {
     markerIndex = 2;
   } else {

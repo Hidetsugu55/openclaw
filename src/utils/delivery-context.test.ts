@@ -299,6 +299,27 @@ describe("delivery context helpers", () => {
       const withKey = deliveryContextFromSessionWithKey(entry, undefined);
       expect(withKey).toEqual(base);
     });
+
+    it("does not invent a route when the entry is missing entirely", () => {
+      // Even when the session key is well-formed and channel-deliverable, we
+      // must not synthesise a destination out of thin air for an undefined
+      // entry — the entry confirms the session is still active.
+      const withKey = deliveryContextFromSessionWithKey(
+        undefined,
+        "agent:main:discord:direct:1490529714870157373",
+      );
+      expect(withKey).toBeUndefined();
+    });
+
+    it("rejects session keys whose accountId slot holds a reserved token", () => {
+      // `channel` in the accountId slot would let group/channel keys
+      // masquerade as direct keys. The helper must refuse to derive `to`.
+      const ctx = deliveryContextFromSessionWithKey(
+        { deliveryContext: { channel: "discord" } },
+        "agent:main:discord:channel:direct:peer",
+      );
+      expect(ctx?.to).toBeUndefined();
+    });
   });
 
   it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {

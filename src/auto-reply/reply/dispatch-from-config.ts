@@ -522,6 +522,7 @@ export async function dispatchReplyFromConfig(
   const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
     originatingChannel: routeReplyChannel,
+    originatingTo: recoveredRouteReplyTo,
     currentSurface,
     shouldRouteToOriginating,
     shouldSuppressTyping,
@@ -531,10 +532,15 @@ export async function dispatchReplyFromConfig(
     explicitDeliverRoute: ctx.ExplicitDeliverRoute,
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
+    sessionKey: acpDispatchSessionKey,
     suppressDirectUserDelivery: suppressAcpChildUserDelivery,
     isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
   });
-  const routeReplyTo = replyRoute.to;
+  // Prefer the explicit route's `to` when present; otherwise adopt the
+  // session-key recovery the routing decision performed (e.g. dashboard
+  // continuation of a Discord direct session whose `deliveryContext.to`
+  // was lost).
+  const routeReplyTo = replyRoute.to ?? recoveredRouteReplyTo;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
   let normalizeReplyMediaPaths:
     | ReturnType<

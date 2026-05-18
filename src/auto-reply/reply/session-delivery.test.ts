@@ -190,4 +190,20 @@ describe("resolveLastToRaw recovers `to` from direct session keys", () => {
       }),
     ).toBe("channel:9999");
   });
+
+  it("does not recover when the persisted channel disagrees with the derived channel", () => {
+    // The entry pins `lastChannel = "telegram"` but the session key derives a
+    // discord peer-id. Returning the discord peer-id would let the caller
+    // hand a Discord id to a Telegram outbound path. Fall through to the
+    // existing originatingTo/toRaw resolution instead.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: "webchat",
+        originatingToRaw: "session:dashboard",
+        persistedLastTo: undefined,
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:main:discord:direct:1490529714870157373",
+      }),
+    ).toBe("session:dashboard");
+  });
 });

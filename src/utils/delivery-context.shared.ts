@@ -122,24 +122,30 @@ export function deliveryContextFromSessionWithKey(
   if (!sessionKey) {
     return base;
   }
-  if (base?.to) {
+  // Require a base context anchored in the persisted entry. If the entry is
+  // missing entirely (or carries no routing-relevant fields at all), do not
+  // invent a destination from the session key alone — we need the entry's
+  // channel hint to confirm the route is still active.
+  if (!base) {
+    return base;
+  }
+  if (base.to) {
     return base;
   }
   const derived = tryDeriveDirectRouteFromSessionKey(sessionKey);
   if (!derived) {
     return base;
   }
-  // If we already have a context with a channel that disagrees with the
-  // session-key channel, do not cross-route — return the original
-  // (under-specified) context untouched.
-  if (base?.channel && base.channel !== derived.channel) {
+  // If the base has a channel and it disagrees with the session-key channel,
+  // do not cross-route — return the original (under-specified) context.
+  if (base.channel && base.channel !== derived.channel) {
     return base;
   }
   return normalizeDeliveryContext({
-    channel: base?.channel ?? derived.channel,
+    channel: base.channel ?? derived.channel,
     to: derived.to,
-    accountId: base?.accountId,
-    threadId: base?.threadId,
+    accountId: base.accountId,
+    threadId: base.threadId,
   });
 }
 

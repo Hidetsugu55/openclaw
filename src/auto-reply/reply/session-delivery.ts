@@ -139,8 +139,12 @@ export function resolveLastToRaw(params: {
       // channel-scoped direct session key. This is the dashboard/webchat
       // continuation case where the entry's `deliveryContext.to` was lost
       // (or never set), yet the session key still carries the peer-id.
+      // Gate by channel agreement: only adopt the derived peer-id when no
+      // *other* external channel is pinned by the persisted entry. This
+      // prevents a Discord peer-id from being handed to a caller that
+      // already has a Telegram channel in its route (or vice-versa).
       const derived = tryDeriveDirectRouteFromSessionKey(params.sessionKey);
-      if (derived) {
+      if (derived && (!persistedChannel || persistedChannel === derived.channel)) {
         return derived.to;
       }
     }
