@@ -69,6 +69,22 @@ describe("applyExpectedModeIfPossible", () => {
     expect(log.debug).not.toHaveBeenCalled();
   });
 
+  it("calls chmod when only special bits (setgid/setuid/sticky) differ from expected", () => {
+    // Directory currently has setgid bit set on top of 0o700 (= 0o2700 in
+    // permission bits). The expected mode is plain 0o700, so the helper must
+    // still issue a chmod to strip the setgid bit — matching the original
+    // unconditional chmod semantics.
+    const log = createLog();
+    const { ops, chmodSync } = createOps({
+      lstatSync: vi.fn(() => ({ mode: 0o042700 }) as unknown as Stats),
+    });
+
+    applyExpectedModeIfPossible("/fake/dir", 0o700, log, ops);
+
+    expect(chmodSync).toHaveBeenCalledTimes(1);
+    expect(chmodSync).toHaveBeenCalledWith("/fake/dir", 0o700);
+  });
+
   it("attempts chmod when lstat throws (current mode unknown)", () => {
     const log = createLog();
     const lstatSync = vi.fn(() => {

@@ -8,6 +8,10 @@ const TOLERABLE_PERMISSION_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOTSUP",
 ]);
 
+// Include the full permission/special-bit range so a stale setuid/setgid/sticky
+// bit on the registry dir or file still triggers a corrective chmod.
+const PERMISSION_BITS_MASK = 0o7777;
+
 export type FilesystemPermissionOps = {
   lstatSync: (target: string) => Stats;
   chmodSync: (target: string, mode: number) => void;
@@ -26,7 +30,7 @@ export function applyExpectedModeIfPossible(
 ): void {
   let currentMode: number | null = null;
   try {
-    currentMode = fs.lstatSync(target).mode & 0o777;
+    currentMode = fs.lstatSync(target).mode & PERMISSION_BITS_MASK;
   } catch {
     // stat failure — let the chmod attempt surface a real error if needed.
   }
