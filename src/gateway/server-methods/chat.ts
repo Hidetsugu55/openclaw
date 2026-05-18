@@ -43,7 +43,10 @@ import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-bi
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  tryDeriveDirectRouteFromSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -595,7 +598,8 @@ function resolveChatSendOriginatingRoute(params: {
       params.entry?.lastChannel ??
       params.entry?.origin?.provider,
   );
-  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  let routeToCandidate: string | undefined =
+    params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
     params.entry?.deliveryContext?.accountId ??
     params.entry?.lastAccountId ??
@@ -655,6 +659,22 @@ function resolveChatSendOriginatingRoute(params: {
     ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
       canInheritConfiguredMainRoute),
   );
+  // When the entry's deliveryContext/lastTo are missing but the session key
+  // itself encodes a direct external peer-id (e.g.
+  // `agent:main:discord:direct:<peer-id>`), recover the destination from the
+  // session key. Only fires for non-webchat clients on channel-scoped direct
+  // sessions; the helper enforces channel/marker/peer-id validity.
+  if (
+    !routeToCandidate &&
+    canInheritDeliverableRoute &&
+    routeChannelCandidate &&
+    routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    const derived = tryDeriveDirectRouteFromSessionKey(params.sessionKey);
+    if (derived && derived.channel === routeChannelCandidate) {
+      routeToCandidate = derived.to;
+    }
+  }
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
     routeChannelCandidate &&

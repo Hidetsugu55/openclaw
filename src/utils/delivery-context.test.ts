@@ -5,6 +5,7 @@ import {
   formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
+  deliveryContextFromSessionWithKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
@@ -239,6 +240,64 @@ describe("delivery context helpers", () => {
       to: "-1001",
       accountId: undefined,
       threadId: "777",
+    });
+  });
+
+  describe("deliveryContextFromSessionWithKey direct fallback", () => {
+    it("recovers `to` from a discord direct session key when entry has only the channel", () => {
+      const ctx = deliveryContextFromSessionWithKey(
+        {
+          deliveryContext: { channel: "discord" },
+          lastChannel: "discord",
+          origin: { provider: "webchat" },
+        },
+        "agent:main:discord:direct:1490529714870157373",
+      );
+      expect(ctx?.channel).toBe("discord");
+      expect(ctx?.to).toBe("1490529714870157373");
+      expect(ctx?.accountId).toBeUndefined();
+      expect(ctx?.threadId).toBeUndefined();
+    });
+
+    it("does not derive `to` for thread-marker session keys", () => {
+      const ctx = deliveryContextFromSessionWithKey(
+        { deliveryContext: { channel: "discord" } },
+        "agent:main:discord:thread:T1",
+      );
+      expect(ctx?.to).toBeUndefined();
+    });
+
+    it("does not derive `to` for webchat-scoped session keys", () => {
+      const ctx = deliveryContextFromSessionWithKey(
+        { deliveryContext: { channel: "webchat" } },
+        "agent:main:webchat:direct:user-1",
+      );
+      expect(ctx?.to).toBeUndefined();
+    });
+
+    it("never overrides an existing `to` from the entry", () => {
+      const ctx = deliveryContextFromSessionWithKey(
+        { deliveryContext: { channel: "discord", to: "999" } },
+        "agent:main:discord:direct:1490529714870157373",
+      );
+      expect(ctx?.to).toBe("999");
+    });
+
+    it("does not cross-route when entry channel disagrees with derived channel", () => {
+      const ctx = deliveryContextFromSessionWithKey(
+        { deliveryContext: { channel: "telegram" } },
+        "agent:main:discord:direct:1490529714870157373",
+      );
+      // entry's telegram channel must win; discord's derived peer-id must
+      // not bleed into a telegram-scoped delivery context.
+      expect(ctx?.to).not.toBe("1490529714870157373");
+    });
+
+    it("returns the base context unchanged when no sessionKey is provided", () => {
+      const entry = { deliveryContext: { channel: "discord" } };
+      const base = deliveryContextFromSession(entry);
+      const withKey = deliveryContextFromSessionWithKey(entry, undefined);
+      expect(withKey).toEqual(base);
     });
   });
 
