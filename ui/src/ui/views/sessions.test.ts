@@ -81,6 +81,7 @@ describe("sessions view", () => {
     // the empty-state should be a plain "no sessions" message without
     // the misleading "Show all" CTA the user could not really act on.
     const container = document.createElement("div");
+    const onClearFilters = vi.fn();
     render(
       renderSessions({
         ...buildProps(buildMultiResult([])),
@@ -89,12 +90,19 @@ describe("sessions view", () => {
         includeGlobal: true,
         includeUnknown: true,
         showArchived: true,
+        onClearFilters,
       }),
       container,
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".data-table-empty-state")).toBeNull();
+    const emptyCell = container.querySelector(".data-table-empty-cell");
+    expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
+    expect(emptyCell?.textContent).not.toContain("No sessions match your filters.");
+    const showAllButton = Array.from(container.querySelectorAll("button")).find(
+      (node) => node.textContent?.trim() === "Show all",
+    );
+    expect(showAllButton).toBeUndefined();
   });
 
   it("renders an explicit archived-session toggle", async () => {
