@@ -1821,9 +1821,12 @@ export function renderApp(state: AppViewState) {
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
-                  // "Clear filters" widens to everything; persist that intent so the
-                  // next visit also starts wide instead of snapping back to narrow
-                  // defaults.
+                  // "Clear filters" widens the three boolean toggles to all-on,
+                  // and we persist that intent so the toggles stay wide on the
+                  // next visit. The numeric inputs (activeMinutes / limit) are
+                  // intentionally NOT persisted — they reset to their
+                  // session-scoped defaults on reload, matching the rest of the
+                  // tab's "clear on clear" semantics for editable numbers.
                   state.applySettings({
                     ...state.settings,
                     sessionsFilter: {
