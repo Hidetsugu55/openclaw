@@ -13,6 +13,9 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
 export const DEFAULT_SESSIONS_FILTERS = {
   activeMinutes: "120",
   limit: "200",
+  includeGlobal: true,
+  includeUnknown: false,
+  showArchived: false,
 } as const;
 
 export const DEFAULT_CRON_FORM: CronFormState = {

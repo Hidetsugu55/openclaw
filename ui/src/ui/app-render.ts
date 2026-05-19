@@ -1790,6 +1790,17 @@ export function renderApp(state: AppViewState) {
                   state.sessionsShowArchived = next.showArchived;
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
+                  // Persist filter toggles so they survive reloads and tab navigation.
+                  // Active-minutes / limit stay session-scoped (numeric inputs that the
+                  // user expects to clear with "Clear filters" each time).
+                  state.applySettings({
+                    ...state.settings,
+                    sessionsFilter: {
+                      includeGlobal: next.includeGlobal,
+                      includeUnknown: next.includeUnknown,
+                      showArchived: next.showArchived,
+                    },
+                  });
                   void loadSessions(state, {
                     activeMinutes: Number(next.activeMinutes) || 0,
                     limit: Number(next.limit) || 0,
@@ -1810,6 +1821,17 @@ export function renderApp(state: AppViewState) {
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
+                  // "Clear filters" widens to everything; persist that intent so the
+                  // next visit also starts wide instead of snapping back to narrow
+                  // defaults.
+                  state.applySettings({
+                    ...state.settings,
+                    sessionsFilter: {
+                      includeGlobal: true,
+                      includeUnknown: true,
+                      showArchived: true,
+                    },
+                  });
                   void loadSessions(state, {
                     activeMinutes: 0,
                     limit: 0,
