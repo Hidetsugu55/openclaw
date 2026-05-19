@@ -21,6 +21,7 @@ import {
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
+  persistSessionsFilter,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -1793,14 +1794,7 @@ export function renderApp(state: AppViewState) {
                   // Persist filter toggles so they survive reloads and tab navigation.
                   // Active-minutes / limit stay session-scoped (numeric inputs that the
                   // user expects to clear with "Clear filters" each time).
-                  state.applySettings({
-                    ...state.settings,
-                    sessionsFilter: {
-                      includeGlobal: next.includeGlobal,
-                      includeUnknown: next.includeUnknown,
-                      showArchived: next.showArchived,
-                    },
-                  });
+                  persistSessionsFilter(state, next);
                   void loadSessions(state, {
                     activeMinutes: Number(next.activeMinutes) || 0,
                     limit: Number(next.limit) || 0,
@@ -1827,13 +1821,10 @@ export function renderApp(state: AppViewState) {
                   // intentionally NOT persisted — they reset to their
                   // session-scoped defaults on reload, matching the rest of the
                   // tab's "clear on clear" semantics for editable numbers.
-                  state.applySettings({
-                    ...state.settings,
-                    sessionsFilter: {
-                      includeGlobal: true,
-                      includeUnknown: true,
-                      showArchived: true,
-                    },
+                  persistSessionsFilter(state, {
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
                   });
                   void loadSessions(state, {
                     activeMinutes: 0,

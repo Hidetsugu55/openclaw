@@ -73,6 +73,30 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("does not surface the Show all CTA when showArchived neutralises the activeMinutes filter", async () => {
+    // When showArchived=true the controller forces activeMinutes=0 on
+    // the gateway request (controllers/sessions.ts:loadSessionsOnce),
+    // so the activeMinutes input is effectively disabled. With all
+    // three boolean toggles on, `hasActiveFilters` must return false →
+    // the empty-state should be a plain "no sessions" message without
+    // the misleading "Show all" CTA the user could not really act on.
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+        limit: "",
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".data-table-empty-state")).toBeNull();
+  });
+
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
     const onFiltersChange = vi.fn();

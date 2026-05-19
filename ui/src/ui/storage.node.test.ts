@@ -710,7 +710,7 @@ describe("loadSettings default gateway URL derivation", () => {
       expect(loaded.sessionsFilter).toBeUndefined();
     });
 
-    it("persists 'clear filters' state (all booleans true) so the next visit starts wide", () => {
+    it("persists 'clear filters' state (all booleans true) so the boolean toggles stay all-on", () => {
       // Simulates the persistence path triggered by
       // app-render.ts:onClearFilters — only the three booleans are
       // persisted; activeMinutes / limit stay session-scoped by design.
