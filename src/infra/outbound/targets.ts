@@ -6,7 +6,7 @@ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
-  deliveryContextFromSession,
+  deliveryContextFromSessionWithKey,
   mergeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -86,6 +86,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
+  /**
+   * Optional agent-scoped session key. When the entry's persisted
+   * `deliveryContext.to` is missing but the key encodes a direct external
+   * peer-id, the helper uses it to recover the destination. Pass when the
+   * caller has the session key in scope; safe to omit otherwise (behavior
+   * matches the prior `deliveryContextFromSession` call exactly).
+   */
+  sessionKey?: string;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -111,7 +119,10 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   const resolvedTurnSource =
     target === "last"
-      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      ? mergeDeliveryContext(
+          params.turnSource,
+          deliveryContextFromSessionWithKey(entry, params.sessionKey),
+        )
       : undefined;
 
   const resolvedTarget = resolveSessionDeliveryTarget({

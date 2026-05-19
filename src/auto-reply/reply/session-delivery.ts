@@ -1,10 +1,13 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  isDirectSessionKey,
+  parseAgentSessionKey,
+  tryDeriveDirectRouteFromSessionKey,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
@@ -41,50 +44,6 @@ function isMainSessionKey(sessionKey?: string): boolean {
     return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
   }
   return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
-}
-
-const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
-const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
-
-function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
-  if (!peerId) {
-    return false;
-  }
-  const tail = parts.slice(markerIndex + 2);
-  if (tail.length === 0) {
-    return true;
-  }
-  return (
-    tail.length === 2 &&
-    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
-    Boolean(normalizeOptionalString(tail[1]))
-  );
-}
-
-function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const parts = scoped.split(":").filter(Boolean);
-  if (parts.length < 2) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 0);
-  }
-  const channel = normalizeMessageChannel(parts[0]);
-  if (!channel || !isDeliverableMessageChannel(channel)) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 1);
-  }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
-    ? hasStrictDirectSessionTail(parts, 2)
-    : false;
 }
 
 function isExternalRoutingChannel(channel?: string): channel is string {
@@ -172,8 +131,22 @@ export function resolveLastToRaw(params: {
   if (!isExternalRoutingChannel(originatingChannel)) {
     const hasExternalFallback =
       isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
-    if (hasExternalFallback && params.persistedLastTo) {
-      return params.persistedLastTo;
+    if (hasExternalFallback) {
+      if (params.persistedLastTo) {
+        return params.persistedLastTo;
+      }
+      // No persisted external `to` either. Try to derive one from a
+      // channel-scoped direct session key. This is the dashboard/webchat
+      // continuation case where the entry's `deliveryContext.to` was lost
+      // (or never set), yet the session key still carries the peer-id.
+      // Gate by channel agreement: only adopt the derived peer-id when no
+      // *other* external channel is pinned by the persisted entry. This
+      // prevents a Discord peer-id from being handed to a caller that
+      // already has a Telegram channel in its route (or vice-versa).
+      const derived = tryDeriveDirectRouteFromSessionKey(params.sessionKey);
+      if (derived && (!persistedChannel || persistedChannel === derived.channel)) {
+        return derived.to;
+      }
     }
   }
 

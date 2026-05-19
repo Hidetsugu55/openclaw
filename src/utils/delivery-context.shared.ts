@@ -4,6 +4,7 @@ import {
   channelRouteTarget,
   normalizeChannelRouteTarget,
 } from "../plugin-sdk/channel-route.js";
+import { tryDeriveDirectRouteFromSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeAccountId } from "./account-id.js";
 import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
@@ -99,6 +100,53 @@ export function deliveryContextFromSession(
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;
+}
+
+/**
+ * Same as `deliveryContextFromSession`, but when the resulting context is
+ * missing `to` and the session key encodes a direct external peer-id (e.g.
+ * `agent:main:discord:direct:1490529714870157373`), recover the route from
+ * the session key. Channel/account/thread bits stay intact as they would
+ * from the standard helper — only `to` is filled in, and only when the
+ * derived channel matches the resolved context channel.
+ *
+ * Use this from call-sites that know the session key (e.g. continuation
+ * paths in `chat.ts`, outbound resolution where the entry is paired with
+ * its key). Other call-sites keep using `deliveryContextFromSession`.
+ */
+export function deliveryContextFromSessionWithKey(
+  entry: DeliveryContextSessionSource | undefined,
+  sessionKey: string | undefined,
+): DeliveryContext | undefined {
+  const base = deliveryContextFromSession(entry);
+  if (!sessionKey) {
+    return base;
+  }
+  // Require a base context anchored in the persisted entry. If the entry is
+  // missing entirely (or carries no routing-relevant fields at all), do not
+  // invent a destination from the session key alone — we need the entry's
+  // channel hint to confirm the route is still active.
+  if (!base) {
+    return base;
+  }
+  if (base.to) {
+    return base;
+  }
+  const derived = tryDeriveDirectRouteFromSessionKey(sessionKey);
+  if (!derived) {
+    return base;
+  }
+  // If the base has a channel and it disagrees with the session-key channel,
+  // do not cross-route — return the original (under-specified) context.
+  if (base.channel && base.channel !== derived.channel) {
+    return base;
+  }
+  return normalizeDeliveryContext({
+    channel: base.channel ?? derived.channel,
+    to: derived.to,
+    accountId: base.accountId,
+    threadId: base.threadId,
+  });
 }
 
 export function mergeDeliveryContext(

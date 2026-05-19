@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 export {
   deliveryContextFromSession,
+  deliveryContextFromSessionWithKey,
   deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,

@@ -20,6 +20,7 @@ describe("resolveReplyRoutingDecision", () => {
       }),
     ).toEqual({
       originatingChannel: "telegram",
+      originatingTo: "telegram:123",
       currentSurface: "slack",
       isInternalWebchatTurn: false,
       shouldRouteToOriginating: true,
@@ -39,6 +40,7 @@ describe("resolveReplyRoutingDecision", () => {
       }),
     ).toEqual({
       originatingChannel: "telegram",
+      originatingTo: "telegram:123",
       currentSurface: "webchat",
       isInternalWebchatTurn: true,
       shouldRouteToOriginating: false,
@@ -58,10 +60,54 @@ describe("resolveReplyRoutingDecision", () => {
       }),
     ).toEqual({
       originatingChannel: "telegram",
+      originatingTo: "telegram:123",
       currentSurface: "discord",
       isInternalWebchatTurn: false,
       shouldRouteToOriginating: false,
       shouldSuppressTyping: true,
     });
+  });
+
+  it("recovers originatingTo from a discord direct session key when none was supplied", () => {
+    const decision = resolveReplyRoutingDecision({
+      provider: "webchat",
+      surface: "webchat",
+      explicitDeliverRoute: true,
+      originatingChannel: "discord",
+      // originatingTo intentionally omitted — the persisted entry lost it.
+      sessionKey: "agent:main:discord:direct:1490529714870157373",
+      isRoutableChannel,
+    });
+    expect(decision.originatingChannel).toBe("discord");
+    expect(decision.originatingTo).toBe("1490529714870157373");
+    expect(decision.shouldRouteToOriginating).toBe(true);
+  });
+
+  it("does not derive originatingTo from webchat-scoped session keys", () => {
+    const decision = resolveReplyRoutingDecision({
+      provider: "webchat",
+      surface: "webchat",
+      explicitDeliverRoute: true,
+      originatingChannel: "webchat",
+      sessionKey: "agent:main:webchat:direct:user-1",
+      isRoutableChannel,
+    });
+    expect(decision.originatingTo).toBeUndefined();
+    expect(decision.shouldRouteToOriginating).toBe(false);
+  });
+
+  it("does not adopt a derived `to` when the derived channel disagrees with the originating channel", () => {
+    const decision = resolveReplyRoutingDecision({
+      provider: "webchat",
+      surface: "webchat",
+      explicitDeliverRoute: true,
+      originatingChannel: "telegram",
+      sessionKey: "agent:main:discord:direct:1490529714870157373",
+      isRoutableChannel,
+    });
+    // The session key derives a discord peer-id, but the originating channel
+    // is telegram — never bleed the peer-id across channels.
+    expect(decision.originatingTo).toBeUndefined();
+    expect(decision.shouldRouteToOriginating).toBe(false);
   });
 });
