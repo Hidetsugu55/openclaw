@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
@@ -9,6 +10,7 @@ import {
 } from "./task-flow-registry.paths.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
+import { applyExpectedModeIfPossible } from "./task-registry.permissions.js";
 
 type FlowRegistryRow = {
   flow_id: string;
@@ -50,6 +52,7 @@ let cachedDatabase: FlowRegistryDatabase | null = null;
 const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
 const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const log = createSubsystemLogger("tasks/task-flow-registry");
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -321,13 +324,13 @@ function ensureSchema(db: DatabaseSync) {
 function ensureFlowRegistryPermissions(pathname: string) {
   const dir = resolveTaskFlowRegistryDir(process.env);
   mkdirSync(dir, { recursive: true, mode: FLOW_REGISTRY_DIR_MODE });
-  chmodSync(dir, FLOW_REGISTRY_DIR_MODE);
+  applyExpectedModeIfPossible(dir, FLOW_REGISTRY_DIR_MODE, log);
   for (const suffix of FLOW_REGISTRY_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (!existsSync(candidate)) {
       continue;
     }
-    chmodSync(candidate, FLOW_REGISTRY_FILE_MODE);
+    applyExpectedModeIfPossible(candidate, FLOW_REGISTRY_FILE_MODE, log);
   }
 }
 
