@@ -413,7 +413,7 @@ export function createAgentEventHandler({
             entry: row
               ? {
                   updatedAt: row.updatedAt ?? undefined,
-                  status: row.status,
+                  status: row.status === "stale" ? "running" : row.status,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
