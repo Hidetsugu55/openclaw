@@ -267,6 +267,20 @@ Per-agent exec node override:
 }
 ```
 
+### Invoke timeout
+
+A `node.invoke` call that does not pass its own timeout uses a default of
+**30000 ms**. Raise it for nodes that legitimately run long commands with
+`gateway.nodes.invokeTimeoutMs` (positive integer, milliseconds):
+
+```jsonc
+{ "gateway": { "nodes": { "invokeTimeoutMs": 120000 } } }
+```
+
+Invalid values (zero, negative, non-numeric) fall back to the 30000 ms default.
+A per-call timeout (for example the CLI `--command-timeout`) still overrides this
+default for that call.
+
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
