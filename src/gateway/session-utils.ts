@@ -424,7 +424,13 @@ function isFinitePositiveTimestamp(value: unknown): value is number {
 }
 
 function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "killed" ||
+    status === "timeout" ||
+    status === "blocked"
+  );
 }
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
@@ -2010,6 +2016,7 @@ export function buildGatewaySessionRow(params: {
           persistedSessionStatus === "failed" ||
           persistedSessionStatus === "killed" ||
           persistedSessionStatus === "timeout" ||
+          persistedSessionStatus === "blocked" ||
           typeof persistedSessionEndedAt === "number"
         ? "historical"
         : "interrupted"

@@ -447,7 +447,14 @@ export type ArtifactDownloadResult = {
   url?: string;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "killed"
+  | "timeout"
+  | "blocked"
+  | "stale";
 export type SubagentRunState = "active" | "interrupted" | "historical";
 
 export type SessionCompactionCheckpointReason =
