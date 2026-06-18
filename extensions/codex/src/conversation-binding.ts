@@ -733,7 +733,13 @@ async function runBoundTurn(params: {
         approvalsReviewer: modelScopedRuntime.approvalsReviewer,
         ...(useStickyNetworkProfile
           ? {}
-          : { sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir) }),
+          : {
+              sandboxPolicy: codexSandboxPolicyForTurn(
+                sandbox,
+                workspaceDir,
+                modelScopedRuntime.extraWritableRoots,
+              ),
+            }),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...(serviceTier ? { serviceTier } : {}),
