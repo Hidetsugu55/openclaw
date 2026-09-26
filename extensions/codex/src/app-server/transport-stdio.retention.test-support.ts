@@ -22,8 +22,11 @@ const spawnEcho = () =>
     headers: {},
   });
 
-// Like Gateway startup, load the process registry and its shared state owners
-// before any run spawns; their module-level contexts must not be the run's.
+// Initialize the process registry and its shared sqlite owners outside any run, as
+// Gateway startup does. Their own module-level contexts and idle timers are created
+// on first use and would otherwise pin the measured run for unrelated reasons.
+// This does not exercise the module-load caveat of transport-stdio itself: the
+// static import above always evaluates it before this script runs.
 const warmup = await spawnEcho();
 const warmupExit = new Promise<void>((resolve) => {
   warmup.once("exit", () => resolve());
