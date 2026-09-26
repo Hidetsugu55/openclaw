@@ -15,7 +15,11 @@ import {
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
-import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
+import {
+  PinnedDispatcherPool,
+  runInPinnedDispatcherPoolContext,
+  type PinnedDispatcherLease,
+} from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
@@ -675,11 +679,16 @@ async function fetchWithSsrFGuardInternal(
             : {}),
         },
       };
+      const dispatchRequest = () =>
+        shouldUseRuntimeFetch
+          ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+          : captureAdmission.fetchImpl(parsedUrl.toString(), init);
       // Only transport rejection belongs here, not policy or capture failures.
       try {
-        response = shouldUseRuntimeFetch
-          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        // Transport resources outlive this request; keep them out of the caller's context.
+        response = await (dispatcher
+          ? runInPinnedDispatcherPoolContext(dispatchRequest)
+          : dispatchRequest());
       } catch (error) {
         captureAdmission.capture?.({ ...captureParams, error });
         throw error;

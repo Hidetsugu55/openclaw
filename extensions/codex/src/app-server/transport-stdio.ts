@@ -2,6 +2,7 @@
  * Creates and configures stdio-backed Codex app-server transports, including
  * Windows spawn normalization and environment filtering.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import {
@@ -21,6 +22,14 @@ const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
   "LD_PRELOAD",
 ]);
 const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
+
+// The plugin loads this module before admitting agent runs. The app-server process
+// and its pipes outlive the run that spawns them: created in that run's context,
+// every later stdout callback would run in it and pin its async-local stores.
+// Turn handlers rebind their own context (see turn-router), so they do not rely on
+// the spawn-time context. If this module were ever first evaluated inside a run,
+// that one run would be captured instead; keep it on the plugin's eager load path.
+const runOutsideSpawningCaller = AsyncLocalStorage.snapshot();
 
 type CodexAppServerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -159,16 +168,18 @@ export async function createStdioTransport(
   });
   const register = await prepareCodexAppServerProcessRegistration();
   assertCurrent?.();
-  const child = spawn(invocation.command, invocation.args, {
-    // Preserve the shipped Supervisor endpoint contract: relative commands and
-    // config discovery may depend on the endpoint's process working directory.
-    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-    env,
-    detached: resolveCodexAppServerDetachedMode(env),
-    shell: invocation.shell,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: invocation.windowsHide,
-  });
+  const child = runOutsideSpawningCaller(() =>
+    spawn(invocation.command, invocation.args, {
+      // Preserve the shipped Supervisor endpoint contract: relative commands and
+      // config discovery may depend on the endpoint's process working directory.
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      env,
+      detached: resolveCodexAppServerDetachedMode(env),
+      shell: invocation.shell,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: invocation.windowsHide,
+    }),
+  );
   try {
     // Attach lifecycle observers before inspection can yield to an early exit.
     onSpawn?.(child);

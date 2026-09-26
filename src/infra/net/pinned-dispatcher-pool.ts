@@ -6,6 +6,15 @@ import { closeDispatcher } from "./ssrf.js";
 // cleanup must keep that context instead of retaining the last request's stores.
 const runInDispatcherPoolContext = AsyncLocalStorage.snapshot();
 
+/**
+ * Dispatch in the pool owner's context. Sockets, parser timers and undici's shared
+ * timer are created while a request dispatches and outlive it; created in the
+ * caller's context they would pin its async-local stores for their whole lifetime.
+ */
+export function runInPinnedDispatcherPoolContext<T>(run: () => T): T {
+  return runInDispatcherPoolContext(run);
+}
+
 export type PinnedDispatcherLease = {
   dispatcher: Dispatcher;
   reused: boolean;
