@@ -37,7 +37,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import type { GatewayClient } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
@@ -64,6 +64,8 @@ export async function connectGatewayClient(params: {
   permissions?: Record<string, boolean>;
   instanceId?: string;
   deviceIdentity?: DeviceIdentity;
+  deviceAuthScope?: GatewayClientOptions["deviceAuthScope"];
+  sharedStateMode?: GatewayClientOptions["sharedStateMode"];
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
   connectChallengeTimeoutMs?: number;
@@ -123,6 +125,8 @@ export async function connectGatewayClient(params: {
       permissions: params.permissions,
       instanceId: params.instanceId,
       deviceIdentity,
+      deviceAuthScope: params.deviceAuthScope,
+      sharedStateMode: params.sharedStateMode,
       onEvent: params.onEvent,
       onHelloOk: params.onHelloOk,
     },

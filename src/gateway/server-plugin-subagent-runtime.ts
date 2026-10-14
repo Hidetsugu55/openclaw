@@ -20,6 +20,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { createBackgroundWorkOwner } from "../process/background-work.js";
+import { notifyAgentRunExecutionCanary } from "./agent-turn/agent-run-execution-canary.test-seam.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import {
@@ -325,6 +326,10 @@ export function createGatewaySubagentRuntime(
               },
               runtimeExecutionObserver: executionControl.onObservation,
               onExecutionStarted: () => {
+                notifyAgentRunExecutionCanary({
+                  kind: "provider-start-hook",
+                  runId: admittedIdentity?.runId ?? "",
+                });
                 // Publication follows the Gateway's post-await live-owner check.
                 if (admittedIdentity) {
                   resolveAdmission?.(admittedIdentity);
