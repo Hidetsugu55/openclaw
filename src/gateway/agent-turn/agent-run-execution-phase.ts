@@ -12,6 +12,7 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { AgentRuntimeExecutionIdentity } from "../../agents/command/types.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -125,7 +126,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         throw new Error("Agent settlement no longer owns this Gateway run");
       }
     };
-    const assertDispatchCurrent = () => {
+    const assertDispatchCurrent = (executionIdentity?: AgentRuntimeExecutionIdentity) => {
       params.assertContextCurrent?.();
       prepared.operatorAuthority?.assertCurrent();
       abortController.signal.throwIfAborted();
@@ -140,6 +141,9 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             abortEntry.operationalRunInstance !== operationalRunInstance ||
             abortEntry.lifecycleGeneration !== params.lifecycleGeneration ||
             abortEntry.sessionKey !== sessionKey ||
+            (executionIdentity !== undefined &&
+              (abortEntry.sessionId !== executionIdentity.sessionId ||
+                params.resolvedSessionId?.trim() !== executionIdentity.sessionId)) ||
             abortEntry.registrationCleanupRequested))
       ) {
         throw new Error("agent dispatch no longer owns this Gateway run");

@@ -522,6 +522,32 @@ describe("startAgentRunExecution Gateway ownership", () => {
     },
   );
 
+  it("fails closed when the native owner's session ID changes during awaited admission", async () => {
+    const execution = createVisibleExecution();
+    bindFollowupCompletion(execution);
+    const gate = createDeferred();
+    const entered = createDeferred();
+    let providerRuns = 0;
+    execution.params.executionStartGuard = async () => {
+      entered.resolve();
+      await gate.promise;
+    };
+    dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+      await dispatch.ingressOpts.onExecutionStarted();
+      providerRuns += 1;
+    });
+
+    const run = startAgentRunExecution(execution.params);
+    await entered.promise;
+    const entry = expectDefined(execution.params.prepared.activeRunAbort.entry);
+    entry.sessionId = "replacement-session";
+    gate.resolve();
+    await run;
+
+    expect(providerRuns).toBe(0);
+    expect(execution.params.prepared.activeRunAbort.markExecutionStarted).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "preserves access across liveness and invalidates creation (new session: %s)",
     async (isNewSession) => {

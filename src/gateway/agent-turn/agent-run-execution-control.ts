@@ -66,12 +66,15 @@ export function createAgentRunExecutionControl(params: StartAgentRunExecutionPar
       }),
     );
   };
-  const markExecutionStarted = async (assertCurrent: () => void): Promise<boolean> => {
+  const markExecutionStarted = async (
+    assertCurrent: (identity: AgentRuntimeExecutionIdentity) => void,
+  ): Promise<boolean> => {
     if (params.executionStartGuard) {
-      assertCurrent();
+      const identity = requireExecutionIdentity();
+      assertCurrent(identity);
       await passExecutionStartGate();
       // The authority claim can yield while the native owner is revoked.
-      assertCurrent();
+      assertCurrent(identity);
     }
     const started = prepared.activeRunAbort.markExecutionStarted();
     if (!started && params.executionStartGuard) {
