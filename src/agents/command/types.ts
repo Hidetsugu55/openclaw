@@ -55,6 +55,36 @@ export type AgentRunContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+/** Native host identity captured at the last boundary before provider execution. */
+export type AgentRuntimeExecutionIdentity = Readonly<{
+  runId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleGeneration: string;
+  resourceOwnership: Readonly<{
+    run: "gateway";
+    session: "gateway";
+    cleanup: "gateway";
+  }>;
+}>;
+
+/**
+ * Bounded attempt facts, not final logical-run attestation. Missing outputTokens means
+ * UNKNOWN, never zero. Model text, tool input, and provider payloads are never included.
+ */
+export type AgentRuntimeExecutionObservation = Readonly<
+  | { kind: "provider_activity"; toolCallStarted: boolean; outputTokens?: number }
+  | { kind: "provider_error"; capacityExhausted: boolean }
+  | { kind: "terminal"; status: "ok" | "error" }
+>;
+
+/** Immutable, ordered observation delivered only through the trusted in-process runtime. */
+export type AgentRuntimeExecutionEvent = Readonly<{
+  identity: AgentRuntimeExecutionIdentity;
+  sequence: number;
+  observation: AgentRuntimeExecutionObservation;
+}>;
+
 /** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
@@ -159,6 +189,8 @@ export type AgentCommandOpts = {
   lifecycleGeneration?: string;
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
+  /** Trusted in-process observer; receives bounded lifecycle facts and never model text. */
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionObservation) => unknown;
   extraSystemPrompt?: string;
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -279,6 +311,7 @@ type AgentCommandGatewayOnlyKey =
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
+  | "runtimeExecutionObserver"
   | "beforeTerminalDelivery"
   | "prepareAssistantTranscriptMessage"
   | "internalDeliverySuppressErrors";

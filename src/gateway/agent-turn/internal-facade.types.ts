@@ -1,5 +1,9 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../../agents/command/types.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
@@ -35,6 +39,10 @@ export type InternalAgentTurnDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
+  onExecution?: (execution: Promise<void>) => void;
+  /** In-process only; awaited with host-native identity before provider execution. */
+  executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;

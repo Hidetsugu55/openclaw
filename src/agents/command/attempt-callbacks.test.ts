@@ -1,9 +1,10 @@
 // Verifies the small lifecycle callback adapter used during agent attempts.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
+import type { AgentRuntimeExecutionObservation } from "./types.js";
 
 describe("createAgentAttemptLifecycleCallbacks", () => {
   it("tracks user-message persistence without closing over the agent command scope", () => {
@@ -78,5 +79,65 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
       lifecycleFinishing: false,
       lifecycleEnded: false,
     });
+  });
+
+  it("emits only bounded provider activity and terminal observations", async () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const observe = vi.fn<(event: AgentRuntimeExecutionObservation) => Promise<void>>(
+      async () => {},
+    );
+    const callbacks = createAgentAttemptLifecycleCallbacks(state, undefined, observe);
+
+    await callbacks.onAgentEvent({ stream: "assistant", data: { text: "must not escape" } });
+    await callbacks.onAgentEvent({ stream: "usage", data: { outputTokens: 12, inputTokens: 99 } });
+    await callbacks.onAgentEvent({ stream: "tool", data: { phase: "start", name: "hidden" } });
+    await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "end" } });
+
+    expect(observe.mock.calls.map(([event]) => event)).toEqual([
+      { kind: "provider_activity", toolCallStarted: false },
+      { kind: "provider_activity", toolCallStarted: false, outputTokens: 12 },
+      { kind: "provider_activity", toolCallStarted: true },
+      { kind: "terminal", status: "ok" },
+    ]);
+  });
+
+  it("classifies capacity failure without exposing provider error text", async () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const observe = vi.fn<(event: AgentRuntimeExecutionObservation) => Promise<void>>(
+      async () => {},
+    );
+    const callbacks = createAgentAttemptLifecycleCallbacks(state, undefined, observe);
+
+    await callbacks.onAgentEvent({
+      stream: "lifecycle",
+      data: { phase: "error", error: "rate limit exceeded: private provider detail" },
+    });
+
+    expect(observe.mock.calls.map(([event]) => event)).toEqual([
+      { kind: "provider_error", capacityExhausted: true },
+      { kind: "terminal", status: "error" },
+    ]);
+  });
+
+  it("reports an error terminal even when the runtime supplies no error text", async () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const observe = vi.fn<(event: AgentRuntimeExecutionObservation) => Promise<void>>(
+      async () => {},
+    );
+    const callbacks = createAgentAttemptLifecycleCallbacks(state, undefined, observe);
+    await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "error" } });
+    expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "terminal", status: "error" });
   });
 });

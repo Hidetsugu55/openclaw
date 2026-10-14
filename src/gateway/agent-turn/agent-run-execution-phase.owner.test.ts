@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
+import type { AgentRuntimeExecutionIdentity } from "../../agents/command/types.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -17,7 +18,6 @@ import { PreparedModelRuntimeBuildResources } from "../../agents/prepared-model-
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import { retainRuntimePluginWork } from "../../agents/runtime-plugin-work.js";
 import * as runtimePlugins from "../../agents/runtime-plugins.js";
-import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -47,6 +47,11 @@ import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
+import {
+  createExecution,
+  createVisibleExecution,
+  bindFollowupCompletion,
+} from "./agent-run-execution-phase.owner.test-support.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
 const { dispatchAgentRunFromGateway, agentCommand } = vi.hoisted(() => ({
@@ -61,163 +66,6 @@ vi.mock("../../commands/agent.js", () => ({
 vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
 }));
-
-function createExecution(
-  options: {
-    aborted?: boolean;
-    assertContextCurrent?: () => void;
-    pendingInputSettlement?: () => Promise<void>;
-  } = {},
-) {
-  const abortCleanup = vi.fn();
-  const gatewayRelease = vi.fn();
-  const callerRelease = vi.fn();
-  const { promise: runtimeReleased, resolve: resolveRuntimeReleased } = createDeferred();
-  const runtimeRelease = vi.fn(async () => resolveRuntimeReleased());
-  const controller = new AbortController();
-  if (options.aborted) {
-    controller.abort();
-  }
-  return {
-    abortCleanup,
-    gatewayRelease,
-    callerRelease,
-    runtimeRelease,
-    runtimeReleased,
-    params: {
-      assertContextCurrent: options.assertContextCurrent,
-      prepared: {
-        releaseCallerAuthority: callerRelease,
-        activeGatewayWorkAdmission: {
-          release: gatewayRelease,
-          run: async (run: () => Promise<void>) => await run(),
-        },
-        activeRunAbort: {
-          cleanup: abortCleanup,
-          controller,
-          registered: false,
-        },
-        effectiveAllowModelOverride: false,
-        lifecycleStorePath: "",
-        operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
-        replyDispatchRuntime: {
-          config: { runtime: "A" },
-          pluginGeneration: "generation-A",
-        },
-        unpersistedOffloadedRefs: [],
-        userTurn: {
-          recorder: options.pendingInputSettlement
-            ? { waitForPendingInputSettlement: options.pendingInputSettlement }
-            : undefined,
-          execApprovalFollowupHandoffClaimId: "claim",
-          message: "continue",
-          senderIsOwner: false,
-          suppressPromptPersistence: false,
-        },
-        workspaceOverride: "/workspace/A",
-      },
-      request: {},
-      cfg: {},
-      activeSessionAgentId: "main",
-      delivery: {},
-      isNewSession: false,
-      isRawModelRun: true,
-      isOneShotModelRun: true,
-      isRestartRecoveryResumeRun: false,
-      suppressVisibleSessionEffects: true,
-      images: [],
-      imageOrder: [],
-      media: [],
-      runId: "owner-test",
-      agentDedupeKeys: [],
-      bestEffortDeliver: false,
-      lifecycleGeneration: "test",
-      preserveUserFacingSessionModelState: false,
-      skipAgentInitialSessionTouch: true,
-      canUseInternalRuntimeHandoff: false,
-      client: null,
-      context: {
-        getSessionEventSubscriberConnIds: () => new Set(),
-        dedupe: new Map(),
-        deps: {},
-        logGateway: { error: vi.fn(), warn: vi.fn() },
-      },
-      io: {
-        emitAcceptance: vi.fn(),
-        emitFinal: vi.fn(),
-      },
-      releaseCronContinuationClaimWithRecovery: async () => true,
-    } as unknown as Parameters<typeof startAgentRunExecution>[0],
-  };
-}
-
-function createVisibleExecution() {
-  const execution = createExecution();
-  const sessionKey = "agent:main:task-access-liveness";
-  Object.assign(execution.params, {
-    suppressVisibleSessionEffects: false,
-    requestedSessionKey: sessionKey,
-    resolvedSessionKey: sessionKey,
-  });
-  Object.assign(execution.params.context, {
-    getRuntimeConfig: () => ({}),
-    getSessionEventSubscriberConnIds: () => new Set(),
-  });
-  execution.params.prepared.activeRunAbort.markExecutionStarted = vi.fn(() => true);
-  execution.params.prepared.userTurn.recorder = {
-    finishPendingInput: vi.fn(),
-  } as unknown as NonNullable<typeof execution.params.prepared.userTurn.recorder>;
-  return execution;
-}
-
-function bindFollowupCompletion(execution: ReturnType<typeof createExecution>) {
-  const { params } = execution;
-  const sessionKey = "agent:main:followup-owner";
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const entry: ChatAbortControllerEntry = {
-    controller: params.prepared.activeRunAbort.controller,
-    sessionId: "followup-session",
-    sessionKey,
-    operationalRunInstance: params.prepared.operationalRunInstance,
-    lifecycleGeneration,
-    startedAtMs: 1,
-    expiresAtMs: Number.MAX_SAFE_INTEGER,
-  };
-  params.resolvedSessionKey = sessionKey;
-  params.resolvedSessionId = entry.sessionId;
-  params.lifecycleGeneration = lifecycleGeneration;
-  params.context.chatAbortControllers = new Map([[params.runId, entry]]);
-  params.prepared.activeRunAbort = {
-    ...params.prepared.activeRunAbort,
-    registered: true,
-    entry,
-  };
-  params.prepared.activeGatewayWorkAdmission.isActive = () => true;
-  execution.abortCleanup.mockImplementation(() => {
-    if (params.context.chatAbortControllers.get(params.runId) === entry) {
-      params.context.chatAbortControllers.delete(params.runId);
-    }
-  });
-  const custody = new AbortController();
-  const owner = SessionFollowupCompletion.bind({
-    runId: params.runId,
-    requesterSessionKey: "agent:main:requester",
-    requesterSessionId: "requester-session",
-    requesterAgentId: "main",
-    targetAgentId: "main",
-    targetSessionKey: sessionKey,
-    custody: {
-      signal: custody.signal,
-      assertCurrent: () => custody.signal.throwIfAborted(),
-      run: (work) => work(),
-      release: () => custody.abort(),
-    },
-  });
-  owner.markAccepted(params.runId);
-  params.prepared.followupCompletion = owner;
-  return owner;
-}
 
 describe("startAgentRunExecution Gateway ownership", () => {
   beforeEach(() => {
@@ -554,6 +402,125 @@ describe("startAgentRunExecution Gateway ownership", () => {
       observedWait.mockRestore();
     }
   });
+
+  it("awaits a rejecting authority gate before any provider activity", async () => {
+    const execution = createVisibleExecution();
+    execution.params.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const sessionKey = execution.params.resolvedSessionKey!;
+    const sessionId = "native-session";
+    const entry = {
+      controller: execution.params.prepared.activeRunAbort.controller,
+      sessionKey,
+      sessionId,
+      lifecycleGeneration: execution.params.lifecycleGeneration,
+      operationalRunInstance: execution.params.prepared.operationalRunInstance,
+      startedAtMs: 1,
+      expiresAtMs: Number.MAX_SAFE_INTEGER,
+    } as ChatAbortControllerEntry;
+    execution.params.resolvedSessionId = sessionId;
+    execution.params.prepared.activeRunAbort = {
+      ...execution.params.prepared.activeRunAbort,
+      registered: true,
+      entry,
+      markExecutionStarted: vi.fn(() => true),
+    };
+    execution.params.context.chatAbortControllers = new Map([[execution.params.runId, entry]]);
+    execution.params.prepared.activeGatewayWorkAdmission.isActive = () => true;
+    let providerRuns = 0;
+    const gate = vi.fn(async (identity: AgentRuntimeExecutionIdentity) => {
+      expect(Object.isFrozen(identity)).toBe(true);
+      expect(Object.isFrozen(identity.resourceOwnership)).toBe(true);
+      expect(identity).toMatchObject({
+        runId: execution.params.runId,
+        sessionKey,
+        sessionId,
+        resourceOwnership: { run: "gateway", session: "gateway", cleanup: "gateway" },
+      });
+      throw new Error("synthetic authority conflict");
+    });
+    execution.params.executionStartGuard = gate;
+    dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+      await dispatch.ingressOpts.onExecutionStarted();
+      providerRuns += 1;
+    });
+
+    await startAgentRunExecution(execution.params);
+
+    expect(gate).toHaveBeenCalledOnce();
+    expect(providerRuns).toBe(0);
+    expect(execution.params.prepared.activeRunAbort.markExecutionStarted).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before the provider when native resource ownership is UNKNOWN", async () => {
+    const execution = createVisibleExecution();
+    execution.params.executionStartGuard = vi.fn(async () => {});
+    let providerRuns = 0;
+    dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+      await dispatch.ingressOpts.onExecutionStarted();
+      providerRuns += 1;
+    });
+
+    await startAgentRunExecution(execution.params);
+
+    expect(execution.params.executionStartGuard).not.toHaveBeenCalled();
+    expect(providerRuns).toBe(0);
+    expect(execution.params.prepared.activeRunAbort.markExecutionStarted).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "rechecks the native owner after awaited admission (revoked: %s)",
+    async (revoked) => {
+      const execution = createVisibleExecution();
+      bindFollowupCompletion(execution);
+      const gate = createDeferred();
+      const entered = createDeferred();
+      const observed: unknown[] = [];
+      let providerRuns = 0;
+      execution.params.executionStartGuard = async () => {
+        entered.resolve();
+        await gate.promise;
+      };
+      execution.params.runtimeExecutionObserver = async (event) => {
+        expect(Object.isFrozen(event)).toBe(true);
+        expect(Object.isFrozen(event.identity)).toBe(true);
+        expect(Object.isFrozen(event.identity.resourceOwnership)).toBe(true);
+        expect(Object.isFrozen(event.observation)).toBe(true);
+        observed.push(event);
+      };
+      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+        await dispatch.ingressOpts.onExecutionStarted();
+        providerRuns += 1;
+        await dispatch.ingressOpts.runtimeExecutionObserver({
+          kind: "provider_activity",
+          toolCallStarted: true,
+        });
+        await dispatch.ingressOpts.runtimeExecutionObserver({ kind: "terminal", status: "ok" });
+      });
+      const run = startAgentRunExecution(execution.params);
+      await entered.promise;
+      expect(providerRuns).toBe(0);
+      if (revoked) {
+        execution.params.prepared.activeRunAbort.controller.abort();
+      }
+      gate.resolve();
+      await run;
+      expect(providerRuns).toBe(revoked ? 0 : 1);
+      expect(observed).toEqual(
+        revoked
+          ? []
+          : [
+              expect.objectContaining({
+                sequence: 1,
+                observation: { kind: "provider_activity", toolCallStarted: true },
+              }),
+              expect.objectContaining({
+                sequence: 2,
+                observation: { kind: "terminal", status: "ok" },
+              }),
+            ],
+      );
+    },
+  );
 
   it.each([false, true])(
     "preserves access across liveness and invalidates creation (new session: %s)",

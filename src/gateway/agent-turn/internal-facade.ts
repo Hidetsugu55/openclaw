@@ -205,6 +205,7 @@ export function createInternalAgentTurnFacade(
           ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
           : {}),
       };
+      let runExecution: Promise<void> | undefined;
       const operation = context.trackExecution(async () => {
         preparationOwnedByExecution = true;
         try {
@@ -254,6 +255,11 @@ export function createInternalAgentTurnFacade(
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
+                executionStartGuard: dispatchOptions.executionStartGuard,
+                runtimeExecutionObserver: dispatchOptions.runtimeExecutionObserver,
+                onExecution: (execution) => {
+                  runExecution = execution;
+                },
               });
             },
             {
@@ -284,6 +290,13 @@ export function createInternalAgentTurnFacade(
           }
           acceptanceResult.reject(dispatchError);
         },
+      );
+      // startTurn settles admission before its separately tracked execution finishes.
+      // Cached/non-dispatched requests have no new execution to join.
+      dispatchOptions.onExecution?.(
+        operation.then(async () => {
+          await runExecution;
+        }),
       );
       const response = (async () => {
         const first = acceptance ?? (await acceptanceResult.promise);

@@ -665,6 +665,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             });
           },
           waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
+          runWithExecutionControl: async (params, control) => {
+            const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
+            return await runWithPluginScope(async () => {
+              assertSessionIdentitiesOwned({ action: "run", sessionKeys: [params.sessionKey] });
+              return await subagent.runWithExecutionControl(params, control);
+            });
+          },
           getSessionMessages: (params) =>
             runWithPluginScope(() => subagent.getSessionMessages(params)),
           deleteSession: async (params) => {

@@ -390,6 +390,7 @@ export async function prepareVisitorPublicationFixture(f: {
         subagent: {
           complete: unexpectedSubagent,
           run: unexpectedSubagent,
+          runWithExecutionControl: unexpectedSubagent,
           waitForRun: unexpectedSubagent,
           getSessionMessages: unexpectedSubagent,
           deleteSession: unexpectedSubagent,

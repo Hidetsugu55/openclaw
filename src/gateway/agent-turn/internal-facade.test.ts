@@ -436,7 +436,12 @@ describe("createInternalAgentTurnFacade", () => {
 
   it("returns acceptance metadata without a final and retains the execution-start observer", async () => {
     const onExecutionStarted = vi.fn();
-    startTurn.mockImplementation(async ({ io }) => {
+    const onExecution = vi.fn();
+    const executionStartGuard = vi.fn(async () => {});
+    const runtimeExecutionObserver = vi.fn(async () => {});
+    startTurn.mockImplementation(async ({ io, ...request }) => {
+      expect(request.executionStartGuard).toBe(executionStartGuard);
+      expect(request.runtimeExecutionObserver).toBe(runtimeExecutionObserver);
       expect(io.emitExecutionStarted).toBe(onExecutionStarted);
       io.emitAcceptance([true, { runId: "run-2", status: "in_flight" }, undefined], {
         cached: true,
@@ -448,7 +453,7 @@ describe("createInternalAgentTurnFacade", () => {
     await expect(
       createFacade().dispatchRaw(
         { message: "test", idempotencyKey: "run-2" },
-        { onExecutionStarted },
+        { onExecutionStarted, onExecution, executionStartGuard, runtimeExecutionObserver },
       ),
     ).resolves.toEqual({
       ok: true,
@@ -457,6 +462,27 @@ describe("createInternalAgentTurnFacade", () => {
       meta: { cached: true, runId: "run-2" },
     });
     expect(onExecutionStarted).toHaveBeenCalledOnce();
+    expect(onExecution).toHaveBeenCalledOnce();
+    await expect(onExecution.mock.calls[0]?.[0]).resolves.toBeUndefined();
+  });
+
+  it("joins the actual run after startTurn has returned acceptance", async () => {
+    const run = createDeferred();
+    const onExecution = vi.fn();
+    startTurn.mockImplementation(async ({ io, onExecution: publishExecution }) => {
+      io.emitAcceptance([true, { runId: "controlled-run", status: "accepted" }, undefined]);
+      publishExecution(run.promise);
+    });
+    await createFacade().dispatchRaw(
+      { message: "test", idempotencyKey: "controlled-run" },
+      { onExecution },
+    );
+    expect(onExecution).toHaveBeenCalledOnce();
+    const observedFailure = expect(onExecution.mock.calls[0]?.[0]).rejects.toThrow(
+      "post-acceptance execution failure",
+    );
+    run.reject(new Error("post-acceptance execution failure"));
+    await observedFailure;
   });
 
   it.each([

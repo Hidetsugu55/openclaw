@@ -1,4 +1,8 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../agents/command/types.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -35,6 +39,8 @@ export type DispatchGatewayMethodInProcessOptions = {
   onAccepted?: (payload: unknown) => void;
   onExecution?: (execution: Promise<void>) => void;
   onExecutionStarted?: () => void;
+  executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;

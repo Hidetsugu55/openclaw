@@ -134,6 +134,115 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("plugin subagent execution control", () => {
+  it("does not treat an accepted or cached run as native execution admission", async () => {
+    vi.spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess").mockImplementation(
+      async (_method, _params, options) => {
+        options?.onExecution?.(Promise.resolve());
+        return { runId: "cached-run", sessionKey: "agent:research:cached" } as never;
+      },
+    );
+    const beforeProvider = vi.fn(async () => {});
+    await expect(
+      createRuntime().runWithExecutionControl(
+        { sessionKey: "agent:research:cached", message: "controlled work" },
+        { beforeProvider },
+      ),
+    ).rejects.toThrow("ownership is UNKNOWN");
+    expect(beforeProvider).not.toHaveBeenCalled();
+  });
+
+  it("returns immutable native identity only after the pre-provider gate", async () => {
+    const identity = Object.freeze({
+      runId: "native-run",
+      sessionKey: "agent:research:controlled",
+      sessionId: "native-session",
+      lifecycleGeneration: "native-generation",
+      resourceOwnership: Object.freeze({
+        run: "gateway" as const,
+        session: "gateway" as const,
+        cleanup: "gateway" as const,
+      }),
+    });
+    const event = Object.freeze({
+      identity,
+      sequence: 1,
+      observation: Object.freeze({
+        kind: "provider_activity" as const,
+        toolCallStarted: false,
+      }),
+    });
+    vi.spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess").mockImplementation(
+      async (_method, _params, options) => {
+        const execution = (async () => {
+          await options?.executionStartGuard?.(identity);
+          options?.onExecutionStarted?.();
+          await options?.runtimeExecutionObserver?.(event);
+        })();
+        options?.onExecution?.(execution);
+        return {
+          runId: identity.runId,
+          sessionKey: identity.sessionKey,
+          runtime: { harness: "native", provider: "test", model: "controlled" },
+        } as never;
+      },
+    );
+    const beforeProvider = vi.fn(async () => {});
+    const onObservation = vi.fn(async (observed) => {
+      expect(Object.isFrozen(observed)).toBe(true);
+      expect(Object.isFrozen(observed.identity)).toBe(true);
+      expect(Object.isFrozen(observed.observation)).toBe(true);
+    });
+
+    const result = await createRuntime().runWithExecutionControl(
+      { sessionKey: identity.sessionKey, message: "controlled work" },
+      { beforeProvider, onObservation },
+    );
+
+    expect(beforeProvider).toHaveBeenCalledExactlyOnceWith(identity);
+    expect(onObservation).toHaveBeenCalledExactlyOnceWith(event);
+    expect(result).toEqual({
+      runId: identity.runId,
+      sessionKey: identity.sessionKey,
+      runtime: { harness: "native", provider: "test", model: "controlled" },
+      execution: identity,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.runtime)).toBe(true);
+  });
+
+  it("rejects accepted identity drift", async () => {
+    const identity = Object.freeze({
+      runId: "native-run",
+      sessionKey: "agent:research:native",
+      sessionId: "native-session",
+      lifecycleGeneration: "native-generation",
+      resourceOwnership: Object.freeze({
+        run: "gateway" as const,
+        session: "gateway" as const,
+        cleanup: "gateway" as const,
+      }),
+    });
+    vi.spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess").mockImplementation(
+      async (_method, _params, options) => {
+        const execution = (async () => {
+          await options?.executionStartGuard?.(identity);
+          options?.onExecutionStarted?.();
+        })();
+        options?.onExecution?.(Promise.resolve(execution));
+        return { runId: "drifted-run", sessionKey: identity.sessionKey } as never;
+      },
+    );
+
+    await expect(
+      createRuntime().runWithExecutionControl(
+        { sessionKey: identity.sessionKey, message: "controlled work" },
+        { beforeProvider: async () => {} },
+      ),
+    ).rejects.toThrow("identity drifted");
+  });
+});
+
 describe("plugin background completions", () => {
   it("uses the selected agent's model and credential owner without creating a session", async () => {
     const dispatch = vi.spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess");

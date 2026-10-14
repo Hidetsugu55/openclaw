@@ -1,4 +1,8 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../../agents/command/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -53,6 +57,8 @@ export type StartAgentRunExecutionParams = {
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
   io: AgentTurnIo;
+  executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
   releaseCronContinuationClaimWithRecovery: (
     outcome?: { terminalOutcome: AgentRunTerminalOutcome },
     onRecovered?: () => void,

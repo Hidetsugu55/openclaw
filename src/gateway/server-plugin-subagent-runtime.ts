@@ -4,6 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
+import type { AgentRuntimeExecutionIdentity } from "../agents/command/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
@@ -195,6 +196,193 @@ export function createGatewaySubagentRuntime(
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
 
+  type RunRequest = Parameters<PluginRuntime["subagent"]["run"]>[0];
+  type RunResult = Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>;
+  type ExecutionControl = Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[1];
+  type ExecutionResult = Awaited<ReturnType<PluginRuntime["subagent"]["runWithExecutionControl"]>>;
+  function run(request: RunRequest, executionControl: ExecutionControl): Promise<ExecutionResult>;
+  function run(request: RunRequest): Promise<RunResult>;
+  async function run(
+    request: RunRequest,
+    executionControl?: ExecutionControl,
+  ): Promise<RunResult | ExecutionResult> {
+    const params = { ...request };
+    const assertCurrent = params.assertCurrent;
+    assertCurrent?.();
+    if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
+      throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
+    }
+    const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
+      params.completionDelivery,
+    );
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const pluginId = normalizeOptionalString(scope?.pluginId);
+    const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
+      pluginId,
+      toolsAlsoAllow: params.toolsAlsoAllow,
+    });
+    const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
+    let sessionMutationCommitGuard = assertCurrent;
+    if (policy) {
+      const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+      if (!context) {
+        throw new Error("Plugin model override requires a live Gateway binding.");
+      }
+      const cfg = context.getRuntimeConfig();
+      sessionMutationCommitGuard = () => {
+        assertCurrent?.();
+        runtimeLifetime?.throwIfAborted();
+        if (
+          getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||
+          context.getRuntimeConfig() !== cfg
+        ) {
+          throw new Error(
+            "Plugin model override configuration changed before admission. Retry the run.",
+          );
+        }
+      };
+      const [modelRefs, agentScope, metadata] = await Promise.all([
+        import("../agents/command/model-ref.js"),
+        import("../agents/agent-scope.js"),
+        import("../plugins/plugin-metadata-snapshot.js"),
+      ]);
+      sessionMutationCommitGuard();
+      const model = expectDefined(params.model, "authorized model override");
+      const agentId = agentScope.resolveSessionAgentId({
+        config: cfg,
+        sessionKey: params.sessionKey,
+      });
+      const manifestPlugins =
+        cfg.plugins?.enabled === false
+          ? []
+          : metadata.resolvePluginMetadataSnapshot({
+              config: cfg,
+              env: process.env,
+              workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
+            });
+      const selection = params.provider
+        ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
+            manifestPlugins,
+          })
+        : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins });
+      if (!selection) {
+        throw new Error("Invalid model override.");
+      }
+      const authProfileId = params.provider ? undefined : splitTrailingAuthProfile(model).profile;
+      assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
+      // The command owns parsing. Replacing its input with this result would
+      // apply non-idempotent provider aliases again; retain the authorized syntax.
+    }
+    let executionOutcome:
+      | Promise<{ status: "ended" } | { status: "failed"; error: unknown }>
+      | undefined;
+    let admittedIdentity: AgentRuntimeExecutionIdentity | undefined;
+    let resolveAdmission: ((identity: AgentRuntimeExecutionIdentity) => void) | undefined;
+    let rejectAdmission: ((error: unknown) => void) | undefined;
+    const admission = executionControl
+      ? new Promise<AgentRuntimeExecutionIdentity>((resolve, reject) => {
+          resolveAdmission = resolve;
+          rejectAdmission = reject;
+        })
+      : undefined;
+    const admissionOutcome = admission?.then(
+      (identity) => ({ status: "admitted" as const, identity }),
+      (error: unknown) => ({ status: "failed" as const, error }),
+    );
+    const payload = await dispatchGatewayMethodInProcess<{
+      runId?: string;
+      sessionKey?: string;
+      runtime?: unknown;
+    }>(
+      "agent",
+      {
+        sessionKey: params.sessionKey,
+        message: params.message,
+        deliver: params.deliver ?? false,
+        ...(allowOverride && params.provider && { provider: params.provider }),
+        ...(allowOverride && params.model && { model: params.model }),
+        ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
+        ...(params.promptMode === "minimal" && { promptMode: params.promptMode }),
+        ...(params.lane && { lane: params.lane }),
+        ...(params.cwd && { cwd: params.cwd }),
+        ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
+        // The Gateway agent schema requires a nonempty idempotency key.
+        idempotencyKey: params.idempotencyKey || randomUUID(),
+      },
+      {
+        allowSyntheticModelOverride,
+        sessionMutationCommitGuard,
+        ...(executionControl
+          ? {
+              executionStartGuard: async (identity: AgentRuntimeExecutionIdentity) => {
+                try {
+                  await executionControl.beforeProvider(identity);
+                  admittedIdentity = identity;
+                } catch (error) {
+                  rejectAdmission?.(error);
+                  throw error;
+                }
+              },
+              runtimeExecutionObserver: executionControl.onObservation,
+              onExecutionStarted: () => {
+                // Publication follows the Gateway's post-await live-owner check.
+                if (admittedIdentity) {
+                  resolveAdmission?.(admittedIdentity);
+                }
+              },
+              onExecution: (value: Promise<void>) => {
+                // Attach rejection handling before acceptance can settle or reject.
+                executionOutcome = value.then(
+                  () => ({ status: "ended" as const }),
+                  (error: unknown) => ({ status: "failed" as const, error }),
+                );
+              },
+            }
+          : {}),
+        agentRunTracking: "plugin_subagent",
+        ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
+        ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+        ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
+        ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
+        ...(params.disableTools === true ? { pluginSubagentToolsAllow: [] } : {}),
+        resolveGatewayContext,
+      },
+    );
+    const runId = payload?.runId;
+    if (typeof runId !== "string" || !runId) {
+      throw new Error("Gateway agent method returned an invalid runId.");
+    }
+    const sessionKey = payload?.sessionKey?.trim() || params.sessionKey;
+    const runtime = normalizePluginSubagentRunRuntime(payload?.runtime);
+    if (!executionControl) {
+      return { runId, sessionKey, ...(runtime ? { runtime } : {}) };
+    }
+    if (!admissionOutcome || !executionOutcome) {
+      throw new Error(
+        "Plugin subagent execution identity is UNKNOWN; provider execution is blocked.",
+      );
+    }
+    const outcome = await Promise.race([admissionOutcome, executionOutcome]);
+    if (outcome.status === "failed") {
+      throw outcome.error;
+    }
+    if (outcome.status === "ended") {
+      throw new Error(
+        "Plugin subagent execution ended before native identity admission; ownership is UNKNOWN.",
+      );
+    }
+    if (outcome.identity.runId !== runId || outcome.identity.sessionKey !== sessionKey) {
+      throw new Error(
+        "Plugin subagent accepted identity drifted from native execution identity; ownership is UNKNOWN.",
+      );
+    }
+    return Object.freeze({
+      runId,
+      sessionKey,
+      ...(runtime ? { runtime: Object.freeze({ ...runtime }) } : {}),
+      execution: outcome.identity,
+    });
+  }
   const subagentRuntime: PluginRuntime["subagent"] = {
     async complete(request) {
       // Authorization and credential selection must use the same request across queue waits.
@@ -333,113 +521,15 @@ export function createGatewaySubagentRuntime(
         execution.release();
       }
     },
-    async run(request) {
-      const params = { ...request };
-      const assertCurrent = params.assertCurrent;
-      assertCurrent?.();
-      if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
-        throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
+    run,
+    async runWithExecutionControl(request, control) {
+      if (typeof control?.beforeProvider !== "function") {
+        throw new Error("Plugin subagent execution control requires a beforeProvider function.");
       }
-      const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
-        params.completionDelivery,
-      );
-      const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId = normalizeOptionalString(scope?.pluginId);
-      const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
-        pluginId,
-        toolsAlsoAllow: params.toolsAlsoAllow,
-      });
-      const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
-      let sessionMutationCommitGuard = assertCurrent;
-      if (policy) {
-        const context = getInProcessGatewayRequestContext(resolveGatewayContext);
-        if (!context) {
-          throw new Error("Plugin model override requires a live Gateway binding.");
-        }
-        const cfg = context.getRuntimeConfig();
-        sessionMutationCommitGuard = () => {
-          assertCurrent?.();
-          runtimeLifetime?.throwIfAborted();
-          if (
-            getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||
-            context.getRuntimeConfig() !== cfg
-          ) {
-            throw new Error(
-              "Plugin model override configuration changed before admission. Retry the run.",
-            );
-          }
-        };
-        const [modelRefs, agentScope, metadata] = await Promise.all([
-          import("../agents/command/model-ref.js"),
-          import("../agents/agent-scope.js"),
-          import("../plugins/plugin-metadata-snapshot.js"),
-        ]);
-        sessionMutationCommitGuard();
-        const model = expectDefined(params.model, "authorized model override");
-        const agentId = agentScope.resolveSessionAgentId({
-          config: cfg,
-          sessionKey: params.sessionKey,
-        });
-        const manifestPlugins =
-          cfg.plugins?.enabled === false
-            ? []
-            : metadata.resolvePluginMetadataSnapshot({
-                config: cfg,
-                env: process.env,
-                workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
-              });
-        const selection = params.provider
-          ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
-              manifestPlugins,
-            })
-          : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins });
-        if (!selection) {
-          throw new Error("Invalid model override.");
-        }
-        const authProfileId = params.provider ? undefined : splitTrailingAuthProfile(model).profile;
-        assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
-        // The command owns parsing. Replacing its input with this result would
-        // apply non-idempotent provider aliases again; retain the authorized syntax.
+      if (control.onObservation !== undefined && typeof control.onObservation !== "function") {
+        throw new Error("Plugin subagent execution observer must be a function.");
       }
-      const payload = await dispatchGatewayMethodInProcess<{
-        runId?: string;
-        sessionKey?: string;
-        runtime?: unknown;
-      }>(
-        "agent",
-        {
-          sessionKey: params.sessionKey,
-          message: params.message,
-          deliver: params.deliver ?? false,
-          ...(allowOverride && params.provider && { provider: params.provider }),
-          ...(allowOverride && params.model && { model: params.model }),
-          ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
-          ...(params.promptMode === "minimal" && { promptMode: params.promptMode }),
-          ...(params.lane && { lane: params.lane }),
-          ...(params.cwd && { cwd: params.cwd }),
-          ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
-          // The Gateway agent schema requires a nonempty idempotency key.
-          idempotencyKey: params.idempotencyKey || randomUUID(),
-        },
-        {
-          allowSyntheticModelOverride,
-          sessionMutationCommitGuard,
-          agentRunTracking: "plugin_subagent",
-          ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
-          ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
-          ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
-          ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
-          ...(params.disableTools === true ? { pluginSubagentToolsAllow: [] } : {}),
-          resolveGatewayContext,
-        },
-      );
-      const runId = payload?.runId;
-      if (typeof runId !== "string" || !runId) {
-        throw new Error("Gateway agent method returned an invalid runId.");
-      }
-      const sessionKey = payload?.sessionKey?.trim() || params.sessionKey;
-      const runtime = normalizePluginSubagentRunRuntime(payload?.runtime);
-      return { runId, sessionKey, ...(runtime ? { runtime } : {}) };
+      return await run({ ...request }, control);
     },
     async waitForRun(params) {
       const payload = await dispatchGatewayMethodInProcess<

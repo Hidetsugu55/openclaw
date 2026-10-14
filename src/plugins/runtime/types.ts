@@ -2,6 +2,10 @@
 // Owner schema module import keeps the ProtocolSchemas registry out of the
 // public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
 import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../../agents/command/types.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
@@ -62,6 +66,24 @@ type SubagentRunResult = {
     model: string;
   };
 };
+
+export type PluginSubagentExecutionControl = Readonly<{
+  /** Must durably claim authority before resolving; rejection blocks provider execution. */
+  beforeProvider: (identity: AgentRuntimeExecutionIdentity) => Promise<void>;
+  /** Optional bounded observer. Events and nested identity/observation values are frozen. */
+  onObservation?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+}>;
+
+export type PluginSubagentExecutionResult = Readonly<{
+  runId: string;
+  sessionKey: string;
+  runtime?: Readonly<{
+    harness: string;
+    provider: string;
+    model: string;
+  }>;
+  execution: AgentRuntimeExecutionIdentity;
+}>;
 
 type SubagentWaitParams = {
   runId: string;
@@ -171,6 +193,16 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
+    /**
+     * Await a trusted, in-process authority claim at the final pre-provider boundary.
+     * The method returns only after admission, with immutable native run/session identity.
+     * Plugins should persist claims through state.openKeyedStore(..., retention: "retained")
+     * and its observe/compareAndApply CAS contract.
+     */
+    runWithExecutionControl: (
+      params: SubagentRunParams,
+      control: PluginSubagentExecutionControl,
+    ) => Promise<PluginSubagentExecutionResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,

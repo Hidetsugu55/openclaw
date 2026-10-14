@@ -117,6 +117,15 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
     };
 
 /**
+ * Existing durable CAS surface for authority ledgers. Open with retention: "retained",
+ * observe a claim key, then compareAndApply the exact comparison. Conflicts lose closed.
+ */
+export type PluginAuthorityLedger<T> = Pick<
+  PluginStateKeyedStore<T, 2>,
+  "observe" | "compareAndApply" | "lookup"
+>;
+
+/**
  * Synchronous plugin-state compatibility contract.
  * @deprecated Use PluginStateKeyedStore from api.runtime.state.openKeyedStore
  * and await its operations. Retained through the next Plugin SDK major.

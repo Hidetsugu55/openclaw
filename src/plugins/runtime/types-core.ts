@@ -516,6 +516,7 @@ export type PluginRuntimeCore = {
     openBlobStore: <TMetadata>(
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
     ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
+    /** Retained observe/compareAndApply stores are the supported durable authority-ledger CAS. */
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;

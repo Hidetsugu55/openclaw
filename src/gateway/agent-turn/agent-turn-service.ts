@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../../agents/command/types.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -46,6 +50,9 @@ type AgentTurnStartRequest = {
   principal: AgentTurnPrincipal | null;
   io: AgentTurnIo;
   onRunObserved?: (runId: string) => void;
+  executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  onExecution?: (execution: Promise<void>) => void;
 };
 
 export function createAgentTurnService(
@@ -62,6 +69,9 @@ export function createAgentTurnService(
     principal,
     io,
     onRunObserved,
+    executionStartGuard,
+    runtimeExecutionObserver,
+    onExecution,
   }: AgentTurnStartRequest): Promise<void> => {
     const promptedAt = Date.now();
     assertAdmissionCurrent?.();
@@ -570,56 +580,58 @@ export function createAgentTurnService(
       preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // Retain the original command and cleanup after the caller receives acceptance.
-      void context
-        .trackExecution(() =>
-          startAgentRunExecution({
-            assertContextCurrent,
-            prepared: preparedDispatch,
-            mainRestartRecoveryOwnerLease,
-            request,
-            cfg,
-            cfgForAgent,
-            sessionEntry,
-            resolvedSessionKey,
-            requestedSessionKey,
-            resolvedSessionId,
-            agentId,
-            activeSessionAgentId,
-            delivery,
-            isNewSession,
-            isRawModelRun,
-            isOneShotModelRun,
-            isRestartRecoveryResumeRun,
-            suppressVisibleSessionEffects,
-            images,
-            imageOrder,
-            media,
-            inputProvenance: preparedDispatch.userTurn.inputProvenance,
-            runId,
-            agentDedupeKeys,
-            swarmExecutionLane,
-            spawnedBy: spawnedByValue,
-            groupId: resolvedGroupId,
-            groupChannel: resolvedGroupChannel,
-            groupSpace: resolvedGroupSpace,
-            bestEffortDeliver,
-            lifecycleGeneration,
-            effectiveBootstrapContextRunKind,
-            preserveUserFacingSessionModelState,
-            sessionEffects,
-            skipAgentInitialSessionTouch,
-            restoredCronContinuation,
-            canUseInternalRuntimeHandoff,
-            client: principal,
-            context,
-            io,
-            releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
-          }),
-        )
-        .catch((error: unknown) => {
-          preparedDispatch.releaseCallerAuthority?.();
-          context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);
-        });
+      const execution = context.trackExecution(() =>
+        startAgentRunExecution({
+          assertContextCurrent,
+          prepared: preparedDispatch,
+          mainRestartRecoveryOwnerLease,
+          request,
+          cfg,
+          cfgForAgent,
+          sessionEntry,
+          resolvedSessionKey,
+          requestedSessionKey,
+          resolvedSessionId,
+          agentId,
+          activeSessionAgentId,
+          delivery,
+          isNewSession,
+          isRawModelRun,
+          isOneShotModelRun,
+          isRestartRecoveryResumeRun,
+          suppressVisibleSessionEffects,
+          images,
+          imageOrder,
+          media,
+          inputProvenance: preparedDispatch.userTurn.inputProvenance,
+          runId,
+          agentDedupeKeys,
+          swarmExecutionLane,
+          spawnedBy: spawnedByValue,
+          groupId: resolvedGroupId,
+          groupChannel: resolvedGroupChannel,
+          groupSpace: resolvedGroupSpace,
+          bestEffortDeliver,
+          lifecycleGeneration,
+          effectiveBootstrapContextRunKind,
+          preserveUserFacingSessionModelState,
+          sessionEffects,
+          skipAgentInitialSessionTouch,
+          restoredCronContinuation,
+          canUseInternalRuntimeHandoff,
+          client: principal,
+          context,
+          io,
+          executionStartGuard,
+          runtimeExecutionObserver,
+          releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
+        }),
+      );
+      void execution.catch((error: unknown) => {
+        preparedDispatch.releaseCallerAuthority?.();
+        context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);
+      });
+      onExecution?.(execution);
       mainRestartRecoveryOwnerLease = undefined;
     } finally {
       try {
