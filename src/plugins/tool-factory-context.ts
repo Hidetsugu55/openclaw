@@ -1,3 +1,4 @@
+import type { DirectUserPluginToolProvenance } from "../agents/direct-user-plugin-tool-provenance.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -20,6 +21,7 @@ export function createPluginToolFactoryContext(params: {
   context: OpenClawPluginToolContext;
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
+  directUserPluginToolProvenance?: DirectUserPluginToolProvenance;
 }): OpenClawPluginToolContext<2> {
   const { entry, registry, context } = params;
   if (context.memoryAudience) {
@@ -28,6 +30,15 @@ export function createPluginToolFactoryContext(params: {
   const record = registry.plugins.find((candidate) => candidate.id === entry.pluginId);
   const authority = capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
   const continuation = entry.contextVersion === 2 ? params.ownerContinuation : undefined;
+  let directUserProvenance: DirectUserPluginToolProvenance | undefined;
+  try {
+    directUserProvenance =
+      entry.contextVersion === 2 && params.directUserPluginToolProvenance?.isCurrent()
+        ? params.directUserPluginToolProvenance
+        : undefined;
+  } catch {
+    directUserProvenance = undefined;
+  }
   // Audience currency guards memory effects: the memory slot owner's own tools. Other
   // plugins reach memory through the provider guard, so a stale audience never fails them.
   const assertMemoryAudienceCurrent =
@@ -45,9 +56,10 @@ export function createPluginToolFactoryContext(params: {
     }
     params.assertInvocationCurrent?.();
     continuation?.assertCurrent();
+    directUserProvenance?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };
-  return {
+  const factoryContext: OpenClawPluginToolContext<2> = {
     ...context,
     ...(continuation
       ? {
@@ -61,4 +73,24 @@ export function createPluginToolFactoryContext(params: {
     },
     assertInvocationCurrent,
   };
+  // These names are host-owned even when an untyped caller supplies lookalike base context.
+  Reflect.deleteProperty(factoryContext, "originTrigger");
+  Reflect.deleteProperty(factoryContext, "deviceId");
+  if (directUserProvenance) {
+    Object.defineProperties(factoryContext, {
+      originTrigger: {
+        configurable: false,
+        enumerable: true,
+        value: directUserProvenance.originTrigger,
+        writable: false,
+      },
+      deviceId: {
+        configurable: false,
+        enumerable: true,
+        value: directUserProvenance.deviceId,
+        writable: false,
+      },
+    });
+  }
+  return factoryContext;
 }

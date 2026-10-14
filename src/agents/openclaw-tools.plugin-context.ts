@@ -16,6 +16,7 @@ import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { DirectUserPluginToolProvenance } from "./direct-user-plugin-tool-provenance.js";
 import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -27,6 +28,8 @@ export type OpenClawPluginToolOptions = {
   runId?: string;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
+  /** Host-only paired direct-user provenance, projected only to V2 plugin factories. */
+  directUserPluginToolProvenance?: DirectUserPluginToolProvenance;
   assertInputCommitAllowed?: () => void;
   agentChannel?: string;
   agentAccountId?: string;

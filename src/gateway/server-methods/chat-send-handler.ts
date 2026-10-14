@@ -167,6 +167,10 @@ async function handleChatSendWithOptions(
     turnKind: request.turnKind,
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
+  const directUserPluginToolProvenance =
+    await externalAuthorityAdmission?.resolveDirectUserPluginToolProvenance?.(
+      externalAdmissionParams,
+    );
   let dashboardSessionAuthorization: SessionMutationAuthorization | undefined;
   const assertDashboardReadCurrent = externalAuthorityAdmission?.allowsDashboardReads(
     externalAdmissionParams,
@@ -606,6 +610,7 @@ async function handleChatSendWithOptions(
       skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
       skillLibraryAuthoring,
       cronCreatorAuthority,
+      directUserPluginToolProvenance,
       assertDashboardReadCurrent,
       externalAuthorityAdmission,
       injection: {

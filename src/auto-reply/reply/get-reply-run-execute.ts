@@ -449,6 +449,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
+      directUserPluginToolProvenance: opts?.directUserPluginToolProvenance,
       bootstrapUserProfileId: personalBootstrapEligible
         ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
         : undefined,

@@ -63,6 +63,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     skillWorkshopProposalRevision,
     skillLibraryAuthoring,
     cronCreatorAuthority,
+    directUserPluginToolProvenance,
     assertDashboardReadCurrent,
     externalAuthorityAdmission,
     injection,
@@ -331,6 +332,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   ? { admittedSessionSettings: admission.admittedSessionSettings }
                   : {}),
                 runId: clientRunId,
+                directUserPluginToolProvenance,
                 operatorAuthority: admission.operatorAuthority,
                 providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,

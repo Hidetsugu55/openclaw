@@ -209,6 +209,8 @@ export type FollowupRun = {
     /** Prepared source delivery ownership; a lost source must not restore host media reads. */
     mediaNormalizationOwner?: "gateway";
     clientCaps?: string[];
+    /** Ephemeral Gateway direct-user provenance. Cleared before any queue transfer. */
+    directUserPluginToolProvenance?: import("../../../agents/direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
     bootstrapUserProfileId?: string;
     gatewayUiCommandTarget?: GatewayUiCommandTarget;
     toolBindings?: Readonly<Record<string, unknown>>;
@@ -300,6 +302,15 @@ export type FollowupRun = {
     skillLibraryAuthoring?: import("../../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   };
 };
+
+/** Queue transfer ends the active direct-user turn; provenance must not survive it. */
+export function clearDirectUserPluginToolProvenanceForQueue(run: {
+  run: {
+    directUserPluginToolProvenance?: import("../../../agents/direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
+  };
+}): void {
+  delete run.run.directUserPluginToolProvenance;
+}
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

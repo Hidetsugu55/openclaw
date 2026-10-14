@@ -24,6 +24,7 @@ export type StartChatDispatchParams = {
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
+  directUserPluginToolProvenance?: import("../../agents/direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
   assertDashboardReadCurrent?: () => void;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {

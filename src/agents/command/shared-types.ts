@@ -22,6 +22,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { DirectUserPluginToolProvenance } from "../direct-user-plugin-tool-provenance.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
@@ -67,6 +68,8 @@ export type AgentRunClientContext = {
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
   /** Host-admitted dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;
+  /** Host-only paired direct-user provenance; never accepted from provider or wire input. */
+  directUserPluginToolProvenance?: DirectUserPluginToolProvenance;
 };
 
 export type AgentRunMessageContext = {

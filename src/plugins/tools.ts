@@ -1,5 +1,6 @@
 /** Builds agent tools registered by plugins, preserving plugin scope around callbacks and descriptors. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DirectUserPluginToolProvenance } from "../agents/direct-user-plugin-tool-provenance.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -273,6 +274,8 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 
 type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
+  /** Host-only provenance projected only to V2 factory contexts. */
+  directUserPluginToolProvenance?: DirectUserPluginToolProvenance;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
@@ -617,6 +620,7 @@ function resolvePluginToolsFromRegistry(
         context: params.context,
         assertInvocationCurrent: params.assertInvocationCurrent,
         ownerContinuation: params.ownerContinuation,
+        directUserPluginToolProvenance: params.directUserPluginToolProvenance,
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
       params.assertInvocationCurrent?.();

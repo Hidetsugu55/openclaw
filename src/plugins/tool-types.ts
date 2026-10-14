@@ -92,9 +92,16 @@ type OpenClawPluginToolContextBase = {
   oneShotCliRun?: boolean;
 };
 
+/** Host-authenticated direct-user provenance exposed only to version 2 factories. */
+export type OpenClawPluginToolDirectUserProvenance = Readonly<{
+  readonly originTrigger?: "direct-user";
+  readonly deviceId?: string;
+}>;
+
 /** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
 export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
-  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  ? OpenClawPluginToolContextBase &
+      OpenClawPluginToolDirectUserProvenance & { assertInvocationCurrent: () => void }
   : OpenClawPluginToolContextBase;
 
 /** A version 2 descriptor explicitly opts into owner-authorized continuations. */

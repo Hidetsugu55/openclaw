@@ -331,6 +331,7 @@ export function runAgentAttempt(
     senderIsOwner: params.opts.senderIsOwner,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
+    directUserPluginToolProvenance: params.opts.directUserPluginToolProvenance,
   };
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =

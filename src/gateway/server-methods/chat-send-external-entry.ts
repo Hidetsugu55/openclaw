@@ -4,6 +4,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { resolveChatSendDirectUserPluginToolProvenance } from "./chat-send-direct-user-provenance.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
@@ -13,6 +14,8 @@ import {
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
+  resolveDirectUserPluginToolProvenance: (params) =>
+    resolveChatSendDirectUserPluginToolProvenance({ ...params, isDirectExternalUser: true }),
   allowsDashboardReads: (params) =>
     params.client?.internal?.authenticatedControlUi === true &&
     authorizeOperatorScopesForMethod("chat.send", params.client.connect.scopes ?? []).allowed &&

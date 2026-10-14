@@ -46,6 +46,8 @@ type InternalReplySessionOptions = {
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Gateway-only paired direct-user provenance; never restored or accepted from channels. */
+  directUserPluginToolProvenance?: import("../../agents/direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
   extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;

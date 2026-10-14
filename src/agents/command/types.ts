@@ -167,6 +167,8 @@ export type AgentCommandOpts = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-authorized dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;
+  /** Host-only paired direct-user provenance; never accepted from public ingress. */
+  directUserPluginToolProvenance?: import("../direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -302,6 +304,7 @@ type AgentCommandGatewayOnlyKey =
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
   | "pinnedWidgetAuthoring"
+  | "directUserPluginToolProvenance"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "operatorAuthority"
