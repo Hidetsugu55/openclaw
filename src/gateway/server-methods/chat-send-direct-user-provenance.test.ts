@@ -6,7 +6,10 @@ import {
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import {
+  clearFollowupQueue,
+  getExistingFollowupQueue,
+} from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -139,15 +142,35 @@ function registerReadinessTool(effect: () => void) {
   return { entry, registry: builder.registry, readObservedContext: () => observedContext };
 }
 
+function createProhibitedEffectProbe() {
+  const effects = {
+    provider: vi.fn(),
+    delivery: vi.fn(),
+    github: vi.fn(),
+    ledger: vi.fn(),
+  };
+  return {
+    effects,
+    invoke() {
+      for (const effect of Object.values(effects)) {
+        effect();
+      }
+    },
+  };
+}
+
+function expectNoProhibitedEffects(
+  effects: ReturnType<typeof createProhibitedEffectProbe>["effects"],
+) {
+  for (const effect of Object.values(effects)) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+}
+
 describe("Gateway direct-user plugin tool provenance", () => {
   it("creates and retains an immutable V2 readiness tool only for the live paired owner", async () => {
     const fixture = createDirectAdmissionFixture();
     const readPairedDevice = vi.fn(async () => fixture.paired);
-    const providerCalls = vi.fn();
-    const subagentRuns = vi.fn();
-    const ledgerMutations = vi.fn();
-    const deliveriesOrNotifications = vi.fn();
-    const githubOperations = vi.fn();
     const readinessUse = vi.fn();
 
     const provenance = await resolveChatSendDirectUserPluginToolProvenance(fixture.params, {
@@ -210,6 +233,19 @@ describe("Gateway direct-user plugin tool provenance", () => {
     fixture.setCurrent(false);
     await expect(tool.execute("readiness-stale", {})).rejects.toThrow("no longer current");
     expect(readinessUse).toHaveBeenCalledOnce();
+  });
+
+  it("strips still-current immutable provenance across queue transfer before embedded tools", async () => {
+    const fixture = createDirectAdmissionFixture();
+    const provenance = await resolveChatSendDirectUserPluginToolProvenance(fixture.params, {
+      getPairedDevice: vi.fn(async () => fixture.paired),
+    });
+    expect(provenance).toBeDefined();
+    expect(Object.isFrozen(provenance)).toBe(true);
+    if (!provenance) {
+      throw new Error("expected direct-user provenance");
+    }
+    expect(provenance.isCurrent()).toBe(true);
 
     const queueKey = "agent:main:queued-provenance-test";
     const queued: FollowupRun = {
@@ -235,17 +271,36 @@ describe("Gateway direct-user plugin tool provenance", () => {
       enqueueFollowupRun(queueKey, queued, { mode: "followup" }, "none", undefined, false),
     ).toBe(true);
     expect(queued.run.directUserPluginToolProvenance).toBeUndefined();
-    clearFollowupQueue(queueKey);
-
-    for (const prohibitedEffect of [
-      providerCalls,
-      subagentRuns,
-      ledgerMutations,
-      deliveriesOrNotifications,
-      githubOperations,
-    ]) {
-      expect(prohibitedEffect).not.toHaveBeenCalled();
+    expect(provenance.isCurrent()).toBe(true);
+    const transferred = getExistingFollowupQueue(queueKey)?.items[0];
+    expect(transferred).toBe(queued);
+    if (!transferred) {
+      throw new Error("expected queued transfer");
     }
+
+    const projectedToolRun = buildEmbeddedAttemptToolRunContext({
+      directUserPluginToolProvenance: transferred.run.directUserPluginToolProvenance,
+      trigger: "user",
+    });
+    expect(projectedToolRun.directUserPluginToolProvenance).toBeUndefined();
+
+    const prohibited = createProhibitedEffectProbe();
+    const readiness = registerReadinessTool(() => prohibited.invoke());
+    const context = createPluginToolFactoryContext({
+      entry: readiness.entry,
+      registry: readiness.registry,
+      context: {},
+      assertInvocationCurrent: () => {},
+      directUserPluginToolProvenance: projectedToolRun.directUserPluginToolProvenance,
+    });
+    const transferredTool = readiness.entry.factory(context);
+    if (transferredTool && !Array.isArray(transferredTool)) {
+      await transferredTool.execute("queued-indirect-probe", {});
+    }
+    expect(transferredTool).toBeNull();
+    expectNoProhibitedEffects(prohibited.effects);
+
+    clearFollowupQueue(queueKey);
   });
 
   it.each([
@@ -327,29 +382,42 @@ describe("Gateway direct-user plugin tool provenance", () => {
         fixture.client.invalidated = true;
       },
     ],
-  ])("omits provenance and cannot create or use readiness for %s", async (_label, reject) => {
-    const fixture = createDirectAdmissionFixture();
-    reject(fixture);
-    const readinessUse = vi.fn();
-    const provenance = await resolveChatSendDirectUserPluginToolProvenance(fixture.params, {
-      getPairedDevice: vi.fn(async () => fixture.paired),
-    });
-    expect(provenance).toBeUndefined();
+  ])(
+    "omits provenance before embedded dispatch and cannot create or use readiness for %s",
+    async (_label, reject) => {
+      const fixture = createDirectAdmissionFixture();
+      reject(fixture);
+      const provenance = await resolveChatSendDirectUserPluginToolProvenance(fixture.params, {
+        getPairedDevice: vi.fn(async () => fixture.paired),
+      });
+      expect(provenance).toBeUndefined();
 
-    const readiness = registerReadinessTool(readinessUse);
-    const context = createPluginToolFactoryContext({
-      entry: readiness.entry,
-      registry: readiness.registry,
-      context: {
-        originTrigger: "direct-user",
-        deviceId: DEVICE_ID,
-      } as OpenClawPluginToolContext,
-      assertInvocationCurrent: () => {},
-      directUserPluginToolProvenance: provenance,
-    });
-    expect(readiness.entry.factory(context)).toBeNull();
-    expect(readinessUse).not.toHaveBeenCalled();
-  });
+      const projectedToolRun = buildEmbeddedAttemptToolRunContext({
+        directUserPluginToolProvenance: provenance,
+        trigger: "user",
+      });
+      expect(projectedToolRun.directUserPluginToolProvenance).toBeUndefined();
+
+      const prohibited = createProhibitedEffectProbe();
+      const readiness = registerReadinessTool(() => prohibited.invoke());
+      const context = createPluginToolFactoryContext({
+        entry: readiness.entry,
+        registry: readiness.registry,
+        context: {
+          originTrigger: "direct-user",
+          deviceId: DEVICE_ID,
+        } as OpenClawPluginToolContext,
+        assertInvocationCurrent: () => {},
+        directUserPluginToolProvenance: projectedToolRun.directUserPluginToolProvenance,
+      });
+      const indirectTool = readiness.entry.factory(context);
+      if (indirectTool && !Array.isArray(indirectTool)) {
+        await indirectTool.execute("indirect-probe", {});
+      }
+      expect(indirectTool).toBeNull();
+      expectNoProhibitedEffects(prohibited.effects);
+    },
+  );
 
   it.each([
     ["missing pairing", (_fixture: ReturnType<typeof createDirectAdmissionFixture>) => null],
