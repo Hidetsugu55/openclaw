@@ -118,7 +118,12 @@ export function createReadinessTool({
 
   async function canonicalTask(taskNodeId) {
     const task = validateContract(await bridge.readCanonicalTask(taskNodeId));
-    requireThat(task.taskNodeId === taskNodeId && task.originatingSession === ctx.sessionKey, 'canonical Task/origin mismatch');
+    requireThat(
+      task.taskNodeId === taskNodeId
+        && task.originatingSession === ctx.sessionKey
+        && task.role === config.workerAgentId,
+      'canonical Task/origin mismatch',
+    );
     return task;
   }
 

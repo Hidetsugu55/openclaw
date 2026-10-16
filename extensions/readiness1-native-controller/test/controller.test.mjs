@@ -44,6 +44,20 @@ test('host canonical descriptor, rather than plugin config, selects the public T
   assert.equal(reads, 1);
 });
 
+test('public host descriptor read rejects a partial or mismatched fixed Task', async () => {
+  const partial = createNativeBridge({
+    config,
+    readCanonicalDescriptor: async () => ({ contract }),
+  });
+  await assert.rejects(partial.readCanonicalTask(contract.taskNodeId), /unexpected fixed Task descriptor fields/);
+
+  const mismatch = createNativeBridge({
+    config,
+    readCanonicalDescriptor: async () => ({ ...descriptor, contract: { ...contract, taskNodeId: 'TASK_other_456' } }),
+  });
+  await assert.rejects(mismatch.readCanonicalTask(contract.taskNodeId), /descriptor\/key mismatch/);
+});
+
 test('thin adapter preserves canonical authority through native receipt, terminal readback, and cleanup', async () => {
   const { tool, calls } = makeTool();
   let task = await activate(tool);

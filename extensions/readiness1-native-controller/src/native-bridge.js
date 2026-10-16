@@ -1,4 +1,4 @@
-import { digest, requireThat } from './contract.js';
+import { digest, requireThat, validateTaskDescriptor } from './contract.js';
 
 export function nativeWorkerSessionKey(agentId, taskNodeId) {
   requireThat(/^[a-z0-9][a-z0-9_-]{0,63}$/.test(agentId), 'invalid fixed worker agent');
@@ -11,8 +11,9 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
   async function descriptor(taskNodeId) {
     if (typeof readHostCanonicalDescriptor === 'function') {
       const value = await readHostCanonicalDescriptor(taskNodeId);
-      requireThat(value && typeof value === 'object' && !Array.isArray(value), 'canonical Task descriptor is unavailable');
-      return value;
+      const fixed = validateTaskDescriptor(value);
+      requireThat(fixed.contract.taskNodeId === taskNodeId, 'canonical Task descriptor/key mismatch');
+      return fixed;
     }
     const value = descriptors.get(taskNodeId);
     requireThat(value, 'canonical Task is not configured');
