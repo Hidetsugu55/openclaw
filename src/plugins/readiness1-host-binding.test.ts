@@ -395,6 +395,7 @@ describe("createReadiness1HostBinding", () => {
     };
     const releaseRunLease = vi.fn(async () => true);
     const releaseWorkspace = vi.fn(async () => {});
+    const runWithExecutionControl = vi.fn();
     let bindAttempt = 0;
     const bindSourceSession = vi.fn(async (context) => {
       expect(context.sessionRoot).toBe(descriptor.contract.root);
@@ -412,7 +413,7 @@ describe("createReadiness1HostBinding", () => {
       assertCurrent: vi.fn(),
       openLedgerStore: vi.fn() as never,
       openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
-      runWithExecutionControl: vi.fn() as never,
+      runWithExecutionControl: runWithExecutionControl as never,
       workspace: {
         config: { current: vi.fn(() => ({})) } as never,
         worktrees: {
@@ -447,6 +448,7 @@ describe("createReadiness1HostBinding", () => {
     expect(releaseRunLease).toHaveBeenCalledTimes(2);
     expect(releaseWorkspace).toHaveBeenCalledTimes(2);
     expect(releaseWorkspace).toHaveBeenLastCalledWith({ path: descriptor.contract.root });
+    expect(runWithExecutionControl).not.toHaveBeenCalled();
   });
 
   it("removes a mismatched host worktree and refuses the source Task", async () => {
