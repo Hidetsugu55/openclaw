@@ -22,6 +22,16 @@ function completeFinalInput() {
         status: "ok" as const,
         providerStarted: true,
         endedAt: 1_700_000_000_000,
+        terminalReceipt: {
+          runId: expected.runId,
+          sessionId: "native-session-123",
+          turnId: "native-turn-123",
+          requested: { provider: "codex", model: "gpt-5" },
+          effective: { provider: "codex", model: "gpt-5", responseModel: "gpt-5" },
+          successfulToolNames: [],
+          rerouted: false,
+          terminalDisposition: "silent" as const,
+        },
         terminalReply: { disposition: "silent" as const },
       },
       usage: 42,
@@ -59,7 +69,7 @@ describe("Readiness #1 source run evidence", () => {
     });
   });
 
-  it("confirms final evidence only for one exact run, durable result, and clean snapshot", () => {
+  it("confirms final evidence only for one exact terminal receipt, durable result, and clean snapshot", () => {
     const evidence = assessReadiness1SourceRunFinalEvidence(completeFinalInput());
 
     expect(evidence).toMatchObject({
@@ -76,10 +86,13 @@ describe("Readiness #1 source run evidence", () => {
     expect(Object.isFrozen(evidence.snapshot)).toBe(true);
   });
 
-  it("keeps identity, usage, and dirty-worktree drift UNKNOWN", () => {
+  it("keeps identity, terminal receipt, usage, and dirty-worktree drift UNKNOWN", () => {
     for (const mutate of [
       (input: ReturnType<typeof completeFinalInput>) => {
         input.observed.runId = "other-run";
+      },
+      (input: ReturnType<typeof completeFinalInput>) => {
+        input.observed.wait.terminalReceipt.runId = "other-run";
       },
       (input: ReturnType<typeof completeFinalInput>) => {
         input.observed.usage = -1;

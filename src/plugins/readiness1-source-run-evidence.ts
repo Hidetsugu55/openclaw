@@ -124,6 +124,7 @@ export function assessReadiness1SourceRunFinalEvidence(
     wait?.status !== "ok" ||
     wait.providerStarted !== true ||
     !Number.isFinite(wait.endedAt) ||
+    wait.terminalReceipt?.runId !== expected.runId ||
     !wait.terminalReply ||
     typeof usage !== "number" ||
     !Number.isSafeInteger(usage) ||
