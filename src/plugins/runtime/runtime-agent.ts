@@ -61,6 +61,8 @@ const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
   return { command, identity };
 });
 
+const READINESS1_SOURCE_TOOL_ALLOW = ["read", "exec", "apply_patch"] as const;
+
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
   // avoiding direct exposure of internal accessor-only options.
@@ -320,6 +322,7 @@ async function createSessionEntry(
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
           const expectedSandbox = params.sandbox;
+          const expectedSourceToolPolicy = params.sourceToolPolicy;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
           const matchingAcpMeta = acpInitial
@@ -349,6 +352,14 @@ async function createSessionEntry(
             matchingEntry.sessionRoot === expectedSessionRoot &&
             matchingEntry.permissionMode === params.permissionMode &&
             matchingEntry.sandbox === expectedSandbox &&
+            (expectedSourceToolPolicy === undefined ||
+              (expectedSourceToolPolicy === "readiness1-source-v1" &&
+                matchingEntry.inheritedToolPolicyVersion === 1 &&
+                matchingEntry.inheritedToolDeny === undefined &&
+                isDeepStrictEqual(
+                  matchingEntry.inheritedToolAllow,
+                  READINESS1_SOURCE_TOOL_ALLOW,
+                ))) &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
@@ -387,6 +398,9 @@ async function createSessionEntry(
             ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
             ...(params.permissionMode !== undefined
               ? { permissionMode: params.permissionMode }
+              : {}),
+            ...(params.sourceToolPolicy !== undefined
+              ? { sourceToolPolicy: params.sourceToolPolicy }
               : {}),
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),

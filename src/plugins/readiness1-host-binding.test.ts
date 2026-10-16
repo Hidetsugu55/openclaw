@@ -400,6 +400,7 @@ describe("createReadiness1HostBinding", () => {
       expect(context.sessionRoot).toBe(descriptor.contract.root);
       expect(context.workspaceDir).toBe(context.sessionRoot);
       expect(context.cwd).toBe(context.sessionRoot);
+      expect(context.requiredToolNames).toEqual(["read", "exec", "apply_patch"]);
       if (bindAttempt++ > 0) {
         throw new Error("session workspace drift");
       }
@@ -566,6 +567,28 @@ describe("createReadiness1HostBinding", () => {
         initialEntry: { agentHarnessId: "openclaw" },
       }),
     ).rejects.toThrow('Plugin "other" is not authorized to require a source session sandbox.');
+  });
+
+  it("refuses source-session tool policy creation from every other plugin", async () => {
+    const builder = createRuntimeTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "other",
+      source: "/plugins/other/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = builder.createApi(record, { config: {} });
+    const runtime = api.runtime as PluginRuntime;
+
+    await expect(
+      runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:harness:openclaw:forbidden-source-tools",
+        sourceToolPolicy: "readiness1-source-v1",
+        initialEntry: { agentHarnessId: "openclaw" },
+      }),
+    ).rejects.toThrow('Plugin "other" is not authorized to require a source session tool policy.');
   });
 
   it("opens the real retained ledger and rejects a retired runtime", async () => {

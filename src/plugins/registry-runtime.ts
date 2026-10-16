@@ -46,6 +46,22 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+function hasExactReadiness1SourceToolPolicy(
+  entry: Pick<
+    SessionEntry,
+    "inheritedToolPolicyVersion" | "inheritedToolAllow" | "inheritedToolDeny"
+  >,
+  requiredToolNames: readonly string[],
+): boolean {
+  return (
+    entry.inheritedToolPolicyVersion === 1 &&
+    entry.inheritedToolDeny === undefined &&
+    Array.isArray(entry.inheritedToolAllow) &&
+    entry.inheritedToolAllow.length === requiredToolNames.length &&
+    entry.inheritedToolAllow.every((toolName, index) => toolName === requiredToolNames[index])
+  );
+}
+
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimes = new WeakMap<PluginRecord, PluginRuntime>();
@@ -329,7 +345,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               existing.spawnedCwd !== context.cwd ||
               existing.spawnedWorkspaceDir !== context.workspaceDir ||
               existing.permissionMode !== "workspace" ||
-              existing.sandbox !== "required"
+              existing.sandbox !== "required" ||
+              !hasExactReadiness1SourceToolPolicy(existing, context.requiredToolNames)
             ) {
               throw new Error("Readiness #1 source session security identity drift.");
             }
@@ -344,6 +361,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             sessionRoot: context.sessionRoot,
             permissionMode: "workspace",
             sandbox: "required",
+            sourceToolPolicy: "readiness1-source-v1",
             initialEntry: { agentHarnessId: "openclaw" },
           });
           assertRuntimeCurrent();
@@ -354,7 +372,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             created.entry.spawnedWorkspaceDir !== context.workspaceDir ||
             created.entry.spawnedCwd !== context.cwd ||
             created.entry.permissionMode !== "workspace" ||
-            created.entry.sandbox !== "required"
+            created.entry.sandbox !== "required" ||
+            !hasExactReadiness1SourceToolPolicy(created.entry, context.requiredToolNames)
           ) {
             throw new Error("Readiness #1 source session security identity drift.");
           }
@@ -623,6 +642,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 ) {
                   throw new Error(
                     `Plugin "${pluginId}" is not authorized to require a source session sandbox.`,
+                  );
+                }
+                if (
+                  params.sourceToolPolicy === "readiness1-source-v1" &&
+                  (record.id !== READINESS1_PLUGIN_ID || record.origin !== "bundled")
+                ) {
+                  throw new Error(
+                    `Plugin "${pluginId}" is not authorized to require a source session tool policy.`,
                   );
                 }
                 const runtimeOwnerCount = [

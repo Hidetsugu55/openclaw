@@ -217,6 +217,24 @@ describe("stored subagent tool policies", () => {
     expect(isToolAllowedByPolicyName("custom_denied_tool", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
   });
+
+  it("restricts a stored source subagent to the exact source tool allowlist", async () => {
+    const { config, sessionKey } = await storedSession(
+      {
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "exec", "apply_patch"],
+      },
+      {},
+      "agent:main:subagent:workboard-readiness1-source",
+    );
+    const policy = resolveInheritedToolPolicyForSession(config, sessionKey);
+    for (const tool of ["read", "exec", "apply_patch"]) {
+      expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(true);
+    }
+    for (const tool of ["message", "web_search", "sessions_send"]) {
+      expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(false);
+    }
+  });
 });
 
 describe("resolveEffectiveToolPolicy", () => {

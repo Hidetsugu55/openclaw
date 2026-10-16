@@ -195,6 +195,7 @@ describe("plugin runtime session creation", () => {
           sessionRoot: sourceWorkspace,
           permissionMode: "workspace",
           sandbox: "required",
+          sourceToolPolicy: "readiness1-source-v1",
           initialEntry: { agentHarnessId: "openclaw" },
         });
 
@@ -204,12 +205,29 @@ describe("plugin runtime session creation", () => {
           spawnedCwd: sourceWorkspace,
           sessionRoot: sourceWorkspace,
           permissionMode: "workspace",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read", "exec", "apply_patch"],
         });
+        expect(created.entry.inheritedToolDeny).toBeUndefined();
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toEqual(created.entry);
       },
     );
+  });
+
+  it("rejects a source tool policy outside the trusted host runtime path", async () => {
+    const result = await createGatewaySession({
+      cfg: {},
+      key: "agent:main:subagent:untrusted-source-tool-policy",
+      commandSource: "test",
+      sourceToolPolicy: "readiness1-source-v1",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "source session tool policy requires trusted host authorization" },
+    });
   });
 
   // Plugin-owned CLI fork creation with colors lives in runtime-agent.session-color.test.ts.

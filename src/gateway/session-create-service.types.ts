@@ -141,6 +141,8 @@ export type CreateGatewaySessionParams = {
     allow: string[];
     deny: string[];
   };
+  /** Trusted in-process marker for the exact Readiness #1 source-session tool allowlist. */
+  sourceToolPolicy?: "readiness1-source-v1";
   /** Host-selected workspace reused for later turns of this session. */
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
