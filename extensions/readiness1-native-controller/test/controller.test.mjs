@@ -337,17 +337,31 @@ test('fixture-only execution callback performs no provider work when admission i
   }
 });
 
-test('fixture continuation advances one durable lifecycle checkpoint at a time', async () => {
-  const { tool, calls } = makeTool();
-  let task = await activate(tool);
+test('fixture continuation resumes only a pre-existing durable lifecycle checkpoint', async () => {
+  const reports = [];
+  const first = makeTool({
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  let task = await activate(first.tool);
+  const { tool, calls } = makeTool({
+    store: first.store,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
 
-  const dispatched = (await tool.execute('continue-dispatch', {
+  const preAdmission = (await tool.execute('continue-pre-admission', {
     action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
   })).details;
-  task = dispatched.task;
-  assert.equal(dispatched.ok, true);
-  assert.equal(dispatched.continuation.completedStep, 'dispatch');
-  assert.equal(dispatched.continuation.plannedNext, 'observe');
+  assert.equal(preAdmission.ok, false);
+  assert.equal(preAdmission.reason, 'PRE_ADMISSION_REQUIRES_OWNER_DECISION');
+  assert.equal(preAdmission.task.status, 'ACTIVE');
+  assert.equal(preAdmission.continuation.automaticResume, false);
+  assert.equal(calls.filter(([name]) => name === 'provider.work').length, 0);
+  assert.equal(reports.length, 1);
+
+  task = preAdmission.task;
+  task = (await tool.execute('explicit-dispatch', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
   assert.equal(task.status, 'RUNNING');
   assert.equal(calls.filter(([name]) => name === 'provider.work').length, 1);
 
@@ -372,8 +386,10 @@ test('fixture continuation advances one durable lifecycle checkpoint at a time',
 });
 
 test('continuation reconciliation treats CANCELLED as terminal without owner or provider work', async () => {
+  let clock = 1_000;
   const reports = [];
   const first = makeTool({
+    now: () => clock,
     sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
   });
   const active = await activate(first.tool);
@@ -382,9 +398,11 @@ test('continuation reconciliation treats CANCELLED as terminal without owner or 
     state.history.push({ kind: 'fixture_cancelled', at: 1_000 });
     return state;
   }, () => {});
+  clock = 1_100_000;
 
   const restarted = makeTool({
     store: first.store,
+    now: () => clock,
     sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
   });
   const reconciled = (await restarted.tool.execute('reconcile-cancelled', {
@@ -398,6 +416,196 @@ test('continuation reconciliation treats CANCELLED as terminal without owner or 
   });
   assert.equal(reports.length, 0);
   assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+});
+
+test('expired DONE continuation is a readback without an owner report or provider work', async () => {
+  let clock = 1_000;
+  const reports = [];
+  const first = makeTool({
+    now: () => clock,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const active = await activate(first.tool);
+  await first.ledger.mutate(contract.taskNodeId, active.revision, (state) => {
+    state.status = 'DONE';
+    state.cleanup = 'pass';
+    state.history.push({ kind: 'fixture_done', at: clock });
+    return state;
+  }, () => {});
+  clock = 1_100_000;
+
+  const restarted = makeTool({
+    store: first.store,
+    now: () => clock,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const reconciled = (await restarted.tool.execute('reconcile-expired-done', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.task.status, 'DONE');
+  assert.equal(reports.length, 0);
+  assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+});
+
+test('continuation STOP reports through fixed Owner readback before any lifecycle action', async () => {
+  const reports = [];
+  const { tool, ledger, calls } = makeTool({
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const active = await activate(tool);
+  await ledger.mutate(contract.taskNodeId, active.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_requested', at: 1_000 });
+    return state;
+  }, () => {});
+
+  const stopped = (await tool.execute('reconcile-stop', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'STOP_REQUESTED');
+  assert.deepEqual(stopped.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(stopped.continuation.automaticResume, false);
+  assert.equal(calls.some(([name]) => ['provider.work', 'worktree.create', 'native.observe'].includes(name)), false);
+  assert.equal(reports.length, 1);
+
+  const repeated = (await tool.execute('reconcile-stop-repeat', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.deepEqual(repeated.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(reports.length, 1);
+});
+
+test('continuation STOP blocks both RUNNING observation and pending cleanup', async () => {
+  const runningReports = [];
+  const running = makeTool({
+    sendFixedOwnerDM: async (payload) => { runningReports.push(payload); return { confirmed: true }; },
+  });
+  let runningTask = await activate(running.tool);
+  runningTask = (await running.tool.execute('dispatch-running-stop', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: runningTask.revision,
+  })).details.task;
+  assert.equal(runningTask.status, 'RUNNING');
+  await running.ledger.mutate(contract.taskNodeId, runningTask.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_before_observe', at: 1_000 });
+    return state;
+  }, () => {});
+  const runningStopped = (await running.tool.execute('reconcile-running-stop', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(runningStopped.reason, 'STOP_REQUESTED');
+  assert.equal(running.calls.filter(([name]) => name === 'native.observe').length, 0);
+  assert.equal(runningReports.length, 1);
+
+  const cleanupReports = [];
+  const cleanup = makeTool({
+    sendFixedOwnerDM: async (payload) => { cleanupReports.push(payload); return { confirmed: true }; },
+  });
+  let cleanupTask = await activate(cleanup.tool);
+  cleanupTask = (await cleanup.tool.execute('dispatch-cleanup-stop', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: cleanupTask.revision,
+  })).details.task;
+  cleanupTask = (await cleanup.tool.execute('observe-cleanup-stop', {
+    action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: cleanupTask.revision,
+  })).details.task;
+  assert.equal(cleanupTask.status, 'ACTIVE');
+  assert.equal(cleanupTask.cleanup, 'pending');
+  await cleanup.ledger.mutate(contract.taskNodeId, cleanupTask.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_before_cleanup', at: 1_000 });
+    return state;
+  }, () => {});
+  const removalsBefore = cleanup.calls.filter(([name]) => name === 'worktree.remove').length;
+  const cleanupStopped = (await cleanup.tool.execute('reconcile-cleanup-stop', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(cleanupStopped.reason, 'STOP_REQUESTED');
+  assert.equal(cleanup.calls.filter(([name]) => name === 'worktree.remove').length, removalsBefore);
+  assert.equal(cleanupReports.length, 1);
+});
+
+test('same continuation reason with a distinct durable checkpoint receives a distinct Owner report', async () => {
+  const reports = [];
+  const { tool, ledger, calls } = makeTool({
+    readCapacity: async () => ({
+      provider: 'codex', version: '1.0.0', source: 'native-structured', workCalls: 0,
+      capacity: 'exhausted', paidOverflow: 'off', resetAt: 5_000,
+    }),
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  let task = await activate(tool);
+  task = (await tool.execute('dispatch-capacity', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'WAITING_PROVIDER_CAPACITY');
+
+  const capacity = (await tool.execute('reconcile-capacity', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(capacity.reason, 'PROVIDER_CAPACITY_WAIT');
+  assert.equal(reports.length, 1);
+
+  const latest = await ledger.read(contract.taskNodeId, () => {});
+  await ledger.mutate(contract.taskNodeId, latest.revision, (state) => {
+    state.wait.resetAt = 6_000;
+    state.history.push({ kind: 'fixture_capacity_checkpoint_changed', at: 1_000 });
+    return state;
+  }, () => {});
+  const changed = (await tool.execute('reconcile-capacity-checkpoint-changed', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(changed.reason, 'PROVIDER_CAPACITY_WAIT');
+  assert.equal(reports.length, 2);
+  assert.equal(calls.some(([name]) => name === 'provider.work'), false);
+
+  const repeated = (await tool.execute('reconcile-capacity-checkpoint-repeat', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(repeated.reason, 'PROVIDER_CAPACITY_WAIT');
+  assert.equal(reports.length, 2);
+});
+
+test('V7 restart without retained custody reports UNKNOWN without a duplicate writer', async () => {
+  const runId = 'native-source-v7-restart-lost';
+  const sessionKey = nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId);
+  const reports = [];
+  const sourceRunBinding = Object.freeze({
+    kind: 'openclaw.readiness1.source-run-binding.v7',
+    async launch(request) {
+      await request.beforeProvider(Object.freeze({ runId, sessionKey }));
+      return Object.freeze({
+        kind: 'openclaw.readiness1.source-run-binding.v7', runId, sessionKey, workspaceDir: contract.root,
+        async readFinalEvidence() { throw new Error('restart must not invent final evidence'); },
+        async readCleanupEvidence() { throw new Error('restart must not invent cleanup evidence'); },
+      });
+    },
+  });
+  const first = makeTool({
+    sourceRunBinding,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  let task = await activate(first.tool);
+  task = (await first.tool.execute('dispatch-v7-before-restart', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'RUNNING');
+
+  const restarted = makeTool({
+    store: first.store,
+    sourceRunBinding,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const blocked = (await restarted.tool.execute('reconcile-v7-after-restart', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'OUTCOME_UNKNOWN');
+  assert.equal(blocked.task.status, 'OUTCOME_UNKNOWN');
+  assert.deepEqual(blocked.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+  assert.equal(reports.length, 1);
 });
 
 test('restart reconciliation reports an ambiguous run once without a duplicate writer', async () => {
@@ -468,7 +676,11 @@ test('capacity wait reports the safe checkpoint rather than silently idling', as
     }),
     sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
   });
-  await activate(tool);
+  let task = await activate(tool);
+  task = (await tool.execute('dispatch-capacity', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'WAITING_PROVIDER_CAPACITY');
   const blocked = (await tool.execute('continue-capacity', {
     action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
   })).details;

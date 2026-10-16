@@ -88,6 +88,16 @@ function assertController(config, ctx) {
   ctx.assertInvocationCurrent();
 }
 
+function continuationCheckpointFingerprint(state) {
+  // Notifications are receipts for this report, not continuation state. Exclude
+  // them so reading the exact same stop after the durable receipt does not
+  // create another event. Every other durable state field (including wait,
+  // gate journal, epoch/receipt, and lifecycle evidence) remains bound.
+  const checkpoint = structuredClone(state);
+  delete checkpoint.notifications;
+  return digest(checkpoint);
+}
+
 function exactArgs(params, allowed, required = []) {
   requireThat(params && typeof params === 'object' && !Array.isArray(params), 'invalid controller request');
   requireThat(Object.keys(params).every((key) => allowed.includes(key)), 'catalog action refused arbitrary input');
@@ -146,7 +156,17 @@ export function createReadinessTool({
       'automatic-resume=no',
     ].join('; ');
     const payload = Object.freeze({ kind: 'BLOCKED', summary });
-    const eventId = bridge.notificationEventId(task, payload);
+    // Keep duplicate suppression scoped to the same durable stop checkpoint.
+    // Different stop reasons or a changed run/workspace checkpoint must remain
+    // visible to the fixed Owner, while a readback of the same stop must not
+    // re-send a notification after its first durable receipt.
+    const eventId = `continuation:${digest({
+      taskNodeId: task.taskNodeId,
+      reason,
+      plannedNext,
+      planDrift,
+      checkpoint: continuationCheckpointFingerprint(record.state),
+    })}`;
     const key = digest({ taskNodeId: task.taskNodeId, eventId });
     const existing = record.state.notifications.find((entry) => entry.key === key);
     if (existing) {
@@ -233,13 +253,6 @@ export function createReadinessTool({
             && checkpoint.state.scopeHash === scopeHash(task),
           'canonical Task continuation checkpoint drift',
         );
-        const authorityValid = checkpoint.state.receipt.valid === true
-          && now() < checkpoint.state.receipt.expiresAt
-          && now() < task.deadline
-          && now() < task.hardSunset;
-        if (!authorityValid) {
-          return reportContinuationStop(task, checkpoint, 'AUTHORITY_EXPIRED_OR_REVOKED', 'OWNER_DECISION_REQUIRED');
-        }
         const state = checkpoint.state;
         if (['DONE', 'CANCELLED'].includes(state.status)) {
           return json({
@@ -248,27 +261,66 @@ export function createReadinessTool({
             continuation: { current: state.status, plannedNext: null, ownerDecisionRequired: false, automaticResume: false },
           });
         }
+        if (state.gate?.stopRequested === true) {
+          return reportContinuationStop(task, checkpoint, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+        }
+        const authorityValid = checkpoint.state.receipt.valid === true
+          && now() < checkpoint.state.receipt.expiresAt
+          && now() < task.deadline
+          && now() < task.hardSunset;
+        if (!authorityValid) {
+          return reportContinuationStop(task, checkpoint, 'AUTHORITY_EXPIRED_OR_REVOKED', 'OWNER_DECISION_REQUIRED');
+        }
         if (state.status === 'WAITING_PROVIDER_CAPACITY') {
           return reportContinuationStop(task, checkpoint, 'PROVIDER_CAPACITY_WAIT', 'capacity.resume');
         }
         if (state.status === 'OUTCOME_UNKNOWN') {
           return reportContinuationStop(task, checkpoint, 'OUTCOME_UNKNOWN', 'OWNER_DECISION_REQUIRED');
         }
-        const next = state.status === 'ACTIVE' && state.cleanup === 'clear' && !state.writer && !state.ticket && state.reserved === 0
-          ? { action: 'dispatch', plannedNext: 'observe', expectedStatus: 'RUNNING' }
-          : state.status === 'RUNNING' && state.writer?.runId && state.ticket?.activeId
+        const next = state.status === 'RUNNING' && state.writer?.runId && state.ticket?.activeId
             ? { action: 'observe', plannedNext: 'cleanup', expectedStatus: 'ACTIVE' }
             : state.status === 'ACTIVE' && state.cleanup === 'pending' && state.workspace && !state.writer && !state.ticket
               ? { action: 'cleanup', plannedNext: null, expectedStatus: 'DONE' }
               : null;
         if (!next) {
-          return reportContinuationStop(task, checkpoint, 'UNEXPECTED_CHECKPOINT', 'OWNER_DECISION_REQUIRED', true);
+          const preAdmission = state.status === 'ACTIVE'
+            && state.cleanup === 'clear'
+            && !state.writer
+            && !state.ticket
+            && state.reserved === 0;
+          return reportContinuationStop(
+            task,
+            checkpoint,
+            preAdmission ? 'PRE_ADMISSION_REQUIRES_OWNER_DECISION' : 'UNEXPECTED_CHECKPOINT',
+            'OWNER_DECISION_REQUIRED',
+            !preAdmission,
+          );
         }
-        const continued = await tool.execute(`continuation:${next.action}`, {
-          action: next.action,
-          taskNodeId: task.taskNodeId,
-          expectedRevision: checkpoint.revision,
-        });
+        let continued;
+        try {
+          continued = await tool.execute(`continuation:${next.action}`, {
+            action: next.action,
+            taskNodeId: task.taskNodeId,
+            expectedRevision: checkpoint.revision,
+          });
+        } catch {
+          const latestAfterFailure = await ledger.read(task.taskNodeId, assertCurrent);
+          requireThat(latestAfterFailure?.state, 'continuation checkpoint was lost');
+          if (['DONE', 'CANCELLED'].includes(latestAfterFailure.state.status)) {
+            return json({
+              ok: true,
+              task: safeRecord(latestAfterFailure),
+              continuation: { current: latestAfterFailure.state.status, plannedNext: null, ownerDecisionRequired: false, automaticResume: false },
+            });
+          }
+          return reportContinuationStop(
+            task,
+            latestAfterFailure,
+            'CONTINUATION_CHECKPOINT_CHANGED',
+            'OWNER_DECISION_REQUIRED',
+            true,
+          );
+        }
         const latest = await ledger.read(task.taskNodeId, assertCurrent);
         requireThat(latest?.state, 'continuation checkpoint was lost');
         if (latest.state.status === 'OUTCOME_UNKNOWN') {
