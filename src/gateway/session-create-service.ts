@@ -607,6 +607,7 @@ export async function createGatewaySession(
       !currentTargetEntry &&
       parentSessionTarget?.agentId === target.agentId &&
       !projectId &&
+      !params.spawnedWorkspaceDir &&
       !params.spawnedCwd &&
       !params.sessionRoot &&
       !params.execNode &&
@@ -625,7 +626,9 @@ export async function createGatewaySession(
       return { ok: false, error: forkWorkspace.error };
     }
     const inheritedWorkspace = forkWorkspace?.value;
-    const requestedRoot = normalizeOptionalString(params.spawnedCwd ?? params.sessionRoot);
+    const requestedRoot = normalizeOptionalString(
+      params.spawnedCwd ?? params.sessionRoot ?? params.spawnedWorkspaceDir,
+    );
     // The parent lock has resolved inherited policy; validate direct roots before binding
     // a child or allowing transcript/baseline preparation to process the selected checkout.
     if (sandboxRequired && requestedRoot && !params.execNode) {
@@ -674,6 +677,7 @@ export async function createGatewaySession(
     }
     preparedLifecycle = preparationResult?.value;
     const pendingWorktree = preparedLifecycle?.pendingWorktree ?? params.pendingWorktree;
+    const spawnedWorkspaceDir = normalizeOptionalString(params.spawnedWorkspaceDir);
     const spawnedCwd = normalizeOptionalString(
       preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? inheritedWorkspace?.spawnedCwd,
     );
@@ -893,6 +897,7 @@ export async function createGatewaySession(
             projectId,
             pendingProjectGitUrl,
             pendingWorktree,
+            spawnedWorkspaceDir,
             spawnedCwd,
             preparedLifecycle,
           }),

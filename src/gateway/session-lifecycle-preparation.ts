@@ -278,12 +278,19 @@ export function projectPreparedSessionWorkspace(
     projectId?: string;
     pendingProjectGitUrl?: string;
     pendingWorktree?: SessionEntry["pendingWorktree"];
+    spawnedWorkspaceDir?: string;
     spawnedCwd?: string;
     preparedLifecycle?: PreparedGatewaySessionLifecycle;
   },
 ): Partial<SessionEntry> {
-  const { projectId, pendingProjectGitUrl, pendingWorktree, spawnedCwd, preparedLifecycle } =
-    params;
+  const {
+    projectId,
+    pendingProjectGitUrl,
+    pendingWorktree,
+    spawnedWorkspaceDir,
+    spawnedCwd,
+    preparedLifecycle,
+  } = params;
   const createdNewEntry = existingEntry === undefined;
   const recovered =
     preparedLifecycle?.worktree &&
@@ -293,6 +300,7 @@ export function projectPreparedSessionWorkspace(
     ...(createdNewEntry && pendingProjectGitUrl ? { pendingProjectGitUrl } : {}),
     ...(createdNewEntry && pendingWorktree ? { pendingWorktree } : {}),
     // Creation owns cwd adoption; public patching does not grant this authority.
+    ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
     ...(spawnedCwd ? { spawnedCwd } : {}),
     ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
     ...(preparedLifecycle?.repositoryWorkspaceId

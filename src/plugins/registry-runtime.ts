@@ -325,7 +325,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           if (existing) {
             if (
               existing.sessionRoot !== context.sessionRoot ||
-              existing.spawnedCwd !== context.cwd
+              existing.spawnedCwd !== context.cwd ||
+              existing.spawnedWorkspaceDir !== context.workspaceDir ||
+              existing.permissionMode !== "workspace"
             ) {
               throw new Error("Readiness #1 source session workspace identity drift.");
             }
@@ -335,8 +337,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             cfg: structuredClone(runtime.config.current()) as OpenClawConfig,
             key: context.sessionKey,
             agentId: context.agentId,
+            spawnedWorkspaceDir: context.workspaceDir,
             spawnedCwd: context.cwd,
             sessionRoot: context.sessionRoot,
+            permissionMode: "workspace",
             initialEntry: { agentHarnessId: "openclaw" },
           });
           assertRuntimeCurrent();
@@ -344,7 +348,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             created.key !== context.sessionKey ||
             created.agentId !== context.agentId ||
             created.entry.sessionRoot !== context.sessionRoot ||
-            created.entry.spawnedCwd !== context.cwd
+            created.entry.spawnedWorkspaceDir !== context.workspaceDir ||
+            created.entry.spawnedCwd !== context.cwd ||
+            created.entry.permissionMode !== "workspace"
           ) {
             throw new Error("Readiness #1 source session workspace identity drift.");
           }

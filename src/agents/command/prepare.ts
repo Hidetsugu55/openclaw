@@ -59,6 +59,7 @@ import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
+import { resolveAgentCommandWorkspaceDir } from "./workspace-binding.js";
 
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
@@ -244,8 +245,11 @@ export async function prepareAgentCommandExecution(
     sessionKey,
   });
   const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
-  const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const workspaceDir = resolveAgentCommandWorkspaceDir({
+    spawnedWorkspaceDir: normalizedSpawned.workspaceDir,
+    sessionEntry: sessionEntryRaw,
+    agentWorkspaceDir,
+  });
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {

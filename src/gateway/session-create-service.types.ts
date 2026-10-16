@@ -141,6 +141,8 @@ export type CreateGatewaySessionParams = {
     allow: string[];
     deny: string[];
   };
+  /** Host-selected workspace reused for later turns of this session. */
+  spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   sessionRoot?: string;
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */

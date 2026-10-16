@@ -316,6 +316,7 @@ async function createSessionEntry(
         let recovered = false;
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
+          const expectedSpawnedWorkspaceDir = params.spawnedWorkspaceDir?.trim() || undefined;
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
@@ -342,6 +343,7 @@ async function createSessionEntry(
             (!acpInitial ||
               (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
                 (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
+            matchingEntry.spawnedWorkspaceDir === expectedSpawnedWorkspaceDir &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
             matchingEntry.sessionRoot === expectedSessionRoot &&
             matchingEntry.permissionMode === params.permissionMode &&
@@ -376,6 +378,9 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.displayName !== undefined ? { displayName: params.displayName } : {}),
+            ...(params.spawnedWorkspaceDir !== undefined
+              ? { spawnedWorkspaceDir: params.spawnedWorkspaceDir }
+              : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
             ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
             ...(params.permissionMode !== undefined

@@ -102,6 +102,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   label?: string;
   /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
   displayName?: string;
+  /** Workspace inherited by the session and reused on later Gateway turns. */
+  spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: RuntimeSessionEntry["permissionMode"];

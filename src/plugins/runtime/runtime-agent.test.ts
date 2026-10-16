@@ -109,6 +109,7 @@ describe("plugin runtime session creation", () => {
         key,
         label: "Native Codex thread",
         displayName: "  Native display title  ",
+        spawnedWorkspaceDir: "/workspace/codex-native-thread",
         initialEntry: {
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -140,6 +141,7 @@ describe("plugin runtime session creation", () => {
           modelSelectionLocked: true,
           label: "Native Codex thread",
           displayName: "Native display title",
+          spawnedWorkspaceDir: "/workspace/codex-native-thread",
           pluginExtensions: {
             codex: {
               supervision: {
@@ -565,6 +567,7 @@ describe("plugin runtime session creation", () => {
             agentHarnessId: "codex",
             modelSelectionLocked: true,
             pluginExtensions: persistedPluginExtensions,
+            spawnedWorkspaceDir: "/workspace",
             spawnedCwd: "/workspace/project",
             sessionRoot: "/workspace",
             permissionMode: "guarded",
@@ -576,6 +579,7 @@ describe("plugin runtime session creation", () => {
           key,
           label: "Replacement label must be ignored",
           displayName: "Renamed upstream title must be ignored",
+          spawnedWorkspaceDir: "/workspace",
           spawnedCwd: "/workspace/project",
           sessionRoot: "/workspace",
           permissionMode: "guarded",
@@ -599,6 +603,7 @@ describe("plugin runtime session creation", () => {
         expect(recovered.sessionId).toBe(sessionId);
         expect(recovered.entry.label).toBe(naming.label);
         expect(recovered.entry.displayName).toBe(naming.displayName);
+        expect(recovered.entry.spawnedWorkspaceDir).toBe("/workspace");
         expect(recovered.entry.initializationPending).toBeUndefined();
         expect(recovered.entry.pluginExtensions).toEqual({
           codex: { supervision: { sourceThreadId: "source-1", modelLocked: true } },
