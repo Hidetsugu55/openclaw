@@ -12,12 +12,14 @@ import {
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 describe("createReadiness1HostBinding", () => {
   it("refuses every plugin except the bundled controller", () => {
     const assertCurrent = vi.fn();
     const openLedgerStore = vi.fn();
     const openCanonicalTaskStore = vi.fn();
+    const runWithExecutionControl = vi.fn();
 
     expect(
       createReadiness1HostBinding({
@@ -25,6 +27,7 @@ describe("createReadiness1HostBinding", () => {
         assertCurrent,
         openLedgerStore,
         openCanonicalTaskStore,
+        runWithExecutionControl,
       }),
     ).toBeUndefined();
     expect(
@@ -33,6 +36,7 @@ describe("createReadiness1HostBinding", () => {
         assertCurrent,
         openLedgerStore,
         openCanonicalTaskStore,
+        runWithExecutionControl,
       }),
     ).toBeUndefined();
     expect(assertCurrent).not.toHaveBeenCalled();
@@ -46,11 +50,13 @@ describe("createReadiness1HostBinding", () => {
     const openLedgerStore = vi.fn(() => store);
     const taskStore = { lookup: vi.fn() };
     const openCanonicalTaskStore = vi.fn(() => taskStore);
+    const runWithExecutionControl = vi.fn();
     const binding = createReadiness1HostBinding({
       record: { id: "readiness1-native-controller", origin: "bundled" },
       assertCurrent,
       openLedgerStore: openLedgerStore as never,
       openCanonicalTaskStore: openCanonicalTaskStore as never,
+      runWithExecutionControl: runWithExecutionControl as never,
     });
 
     expect(binding).toBeDefined();
@@ -67,6 +73,81 @@ describe("createReadiness1HostBinding", () => {
     await expect(binding?.readCanonicalDescriptor("invalid task id")).rejects.toThrow(
       "canonical Task id is invalid",
     );
+  });
+
+  it("starts only a host-stored read-only Task with a native pre-provider admission", async () => {
+    const taskNodeId = "TASK_read_123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "researcher",
+        actionClass: "read",
+        caps: { provider: "codex" },
+      },
+      instructions: "Read the fixed source and return a concise summary.",
+    };
+    const assertCurrent = vi.fn();
+    const beforeProvider = vi.fn(async () => {});
+    const runWithExecutionControl = vi.fn(
+      async (
+        params: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[0],
+        control: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[1],
+      ) => {
+        const identity = Object.freeze({
+          runId: "native-read-run",
+          sessionKey: params.sessionKey,
+          sessionId: "native-read-session",
+          lifecycleGeneration: "generation-1",
+          resourceOwnership: Object.freeze({ run: "gateway", session: "gateway", cleanup: "gateway" }),
+        });
+        await control.beforeProvider(identity);
+        return Object.freeze({ runId: identity.runId, sessionKey: identity.sessionKey, execution: identity });
+      },
+    );
+    const binding = createReadiness1HostBinding({
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent,
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl,
+    });
+    if (!binding) throw new Error("Readiness #1 host binding was not created");
+
+    await expect(
+      binding.runCanonicalReadOnly({
+        taskNodeId,
+        ticketId: "ticket-read-123",
+        beforeProvider,
+      }),
+    ).resolves.toMatchObject({ runId: "native-read-run" });
+    expect(beforeProvider).toHaveBeenCalledTimes(1);
+    expect(runWithExecutionControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:researcher:subagent:workboard-readiness1-[a-f0-9]{24}$/),
+        message: descriptor.instructions,
+        provider: "codex",
+        disableTools: true,
+        promptMode: "minimal",
+        lightContext: true,
+        deliver: false,
+        idempotencyKey: "ticket-read-123",
+      }),
+      expect.objectContaining({ beforeProvider: expect.any(Function) }),
+    );
+
+    const sourceBinding = createReadiness1HostBinding({
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent,
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({
+        lookup: vi.fn(async () => ({ ...descriptor, contract: { ...descriptor.contract, actionClass: "source" } })),
+      })) as never,
+      runWithExecutionControl,
+    });
+    await expect(
+      sourceBinding?.runCanonicalReadOnly({ taskNodeId, ticketId: "ticket-source-123", beforeProvider }),
+    ).rejects.toThrow("canonical read-only Task is invalid");
+    expect(runWithExecutionControl).toHaveBeenCalledTimes(1);
   });
 
   it("injects the binding only for the exact bundled controller runtime", () => {

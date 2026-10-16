@@ -112,6 +112,7 @@ test('only a host-issued runtime binding makes the durable status route availabl
     kind: 'openclaw.readiness1.host-binding.v1',
     openLedgerStore() { return store; },
     async readCanonicalDescriptor() { return descriptor; },
+    async runCanonicalReadOnly() { throw new Error('read-only run must stay unreachable from status'); },
   });
   const { registration } = captureRegistration({ runtime: { readiness1HostBinding: binding } });
   const tool = registration.create(directOwnerContext());
