@@ -653,6 +653,95 @@ describe("createReadiness1HostBinding", () => {
     expect(releaseWorkspace).not.toHaveBeenCalled();
   });
 
+  it("rejects source index digest drift before provider admission and releases the workspace", async () => {
+    const taskNodeId = "TASK_source_v4_index_drift";
+    const ticketId = "ticket-source-v4-index-drift";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v4-index-drift",
+      },
+      instructions: "Use only the canonical source worktree.",
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v4-index-drift",
+      worktreeBranch: "openclaw/readiness1-task-source-v4-index-drift",
+    };
+    const lookup = vi
+      .fn()
+      .mockResolvedValueOnce(descriptor)
+      .mockResolvedValueOnce(descriptor)
+      .mockResolvedValueOnce({ ...descriptor, indexDigest: "c".repeat(64) });
+    const releaseRunLease = vi.fn(async () => true);
+    const releaseWorkspace = vi.fn(async () => {});
+    const beforeProvider = vi.fn(async () => {});
+    const runWithExecutionControl = vi.fn(
+      async (
+        params: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[0],
+        control: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[1],
+      ) => {
+        await control.beforeProvider(
+          Object.freeze({
+            runId: "native-source-index-drift",
+            sessionKey: params.sessionKey,
+            sessionId: "native-source-session",
+            lifecycleGeneration: "generation-1",
+            resourceOwnership: Object.freeze({
+              run: "gateway" as const,
+              session: "gateway" as const,
+              cleanup: "gateway" as const,
+            }),
+          }),
+        );
+        throw new Error("provider should not start after index digest drift");
+      },
+    );
+    const binding = createReadiness1SourceRunBindingV4({
+      acquireSourceRunLease: vi.fn(async () => ({ release: releaseRunLease })),
+      bindSourceSession: vi.fn(async () => {}),
+      assertSourceSession: vi.fn(async () => {}),
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup })) as never,
+      runWithExecutionControl,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v4-index-drift",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: releaseWorkspace,
+          removeIfLossless: vi.fn(async () => true),
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run v4 binding was not created");
+
+    await expect(binding.launch({ taskNodeId, ticketId, beforeProvider })).rejects.toThrow(
+      "canonical source Task drift before provider",
+    );
+    expect(beforeProvider).not.toHaveBeenCalled();
+    expect(releaseRunLease).toHaveBeenCalledTimes(1);
+    expect(releaseWorkspace).toHaveBeenCalledWith({ path: descriptor.contract.root });
+  });
+
   it("removes a mismatched host worktree and refuses the source Task", async () => {
     const taskNodeId = "TASK_source_456";
     const claimId = "ticket-source-456";

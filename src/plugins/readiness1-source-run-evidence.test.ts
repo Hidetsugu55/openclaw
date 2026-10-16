@@ -86,6 +86,20 @@ describe("Readiness #1 source run evidence", () => {
     expect(Object.isFrozen(evidence.snapshot)).toBe(true);
   });
 
+  it("copies confirmed result and snapshot facts away from the observed input", () => {
+    const input = completeFinalInput();
+    const evidence = assessReadiness1SourceRunFinalEvidence(input);
+    input.observed.result.digest = "d".repeat(64);
+    input.observed.snapshot.head = "e".repeat(40);
+    input.observed.snapshot.indexDigest = "f".repeat(64);
+
+    expect(evidence).toMatchObject({
+      state: "CONFIRMED",
+      result: { digest: "a".repeat(64) },
+      snapshot: { head: "b".repeat(40), indexDigest: "c".repeat(64) },
+    });
+  });
+
   it("keeps identity, terminal receipt, usage, and dirty-worktree drift UNKNOWN", () => {
     for (const mutate of [
       (input: ReturnType<typeof completeFinalInput>) => {

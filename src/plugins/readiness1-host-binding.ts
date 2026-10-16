@@ -143,6 +143,7 @@ type CanonicalSourceTask = Readonly<{
   sourceRoot: string;
   worktreeName: string;
   worktreeBranch: string;
+  indexDigest: string;
 }>;
 
 type CanonicalSourceLaunchTask = Readonly<{
@@ -235,6 +236,7 @@ function canonicalSourceTask(taskNodeId: string, value: unknown): CanonicalSourc
     sourceRoot: descriptor.sourceRoot,
     worktreeName: descriptor.worktreeName,
     worktreeBranch: descriptor.worktreeBranch,
+    indexDigest: String(descriptor.indexDigest),
   });
 }
 
@@ -260,7 +262,8 @@ function sameCanonicalSourceTask(left: CanonicalSourceTask, right: CanonicalSour
     left.root === right.root &&
     left.sourceRoot === right.sourceRoot &&
     left.worktreeName === right.worktreeName &&
-    left.worktreeBranch === right.worktreeBranch
+    left.worktreeBranch === right.worktreeBranch &&
+    left.indexDigest === right.indexDigest
   );
 }
 
