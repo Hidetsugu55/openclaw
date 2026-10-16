@@ -13,14 +13,18 @@ import {
   createReadiness1SourceRunBindingV4,
   createReadiness1SourceRunBindingV5,
   createReadiness1SourceRunBindingV6,
+  createReadiness1SourceRunBindingV7,
   READINESS1_HOST_BINDING_KIND,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
   READINESS1_SOURCE_RUN_BINDING_V5_KIND,
   READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V7_KIND,
   type Readiness1SourceRunBindingV5,
+  type Readiness1SourceRunBindingV6,
 } from "./readiness1-host-binding.js";
+import type { Readiness1SourceRunFinalEvidence } from "./readiness1-source-run-evidence.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -846,6 +850,162 @@ describe("createReadiness1HostBinding", () => {
     expect(callerObservation).toHaveBeenCalledWith(finalEvent);
     expect(launched).not.toHaveProperty("release");
     expect(launched).not.toHaveProperty("cleanup");
+  });
+
+  it("runs one host cleanup finalizer only after exact final evidence", async () => {
+    const expected = Object.freeze({
+      runId: "native-source-v7",
+      sessionKey: "agent:dev-host:subagent:workboard-readiness1-v7",
+      workspaceDir: "/state/worktrees/wt-v7",
+    });
+    const terminal: Readiness1SourceRunFinalEvidence = Object.freeze({
+      kind: "openclaw.readiness1.source-run-final-evidence.v1",
+      state: "CONFIRMED",
+      ...expected,
+      providerStarted: true,
+      endedAt: 1_700_000_000_000,
+      usage: 42,
+      result: Object.freeze({
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        digest: "f".repeat(64),
+        byteLength: 128,
+      }),
+      snapshot: Object.freeze({
+        workspaceDir: expected.workspaceDir,
+        head: "a".repeat(40),
+        indexDigest: "b".repeat(64),
+        dirty: "",
+      }),
+    });
+    const readFinalEvidence = vi.fn(async () => terminal);
+    const v6: Readiness1SourceRunBindingV6 = Object.freeze({
+      kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+      launch: async () =>
+        Object.freeze({
+          kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+          ...expected,
+          readFinalEvidence,
+        }),
+    });
+    const finalizeCleanup = vi.fn(
+      async (received: { runId: string; sessionKey: string; workspaceDir: string }) =>
+        Object.freeze({
+          runId: received.runId,
+          sessionKey: received.sessionKey,
+          workspaceDir: received.workspaceDir,
+          processStopped: true,
+          groupStopped: true,
+          containerRemoved: true,
+          lsofClear: true,
+          runLeaseReleased: true,
+          workspaceReleased: true,
+          workspaceRemoved: true,
+        }),
+    );
+    const binding = createReadiness1SourceRunBindingV7({
+      v6,
+      assertCurrent: vi.fn(),
+      finalizeCleanup,
+    });
+    if (!binding) throw new Error("Readiness #1 source run v7 binding was not created");
+
+    const launched = await binding.launch({
+      taskNodeId: "TASK_source_v7_123",
+      ticketId: "ticket-source-v7-123",
+      beforeProvider: async () => {},
+    });
+    expect(launched).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V7_KIND, ...expected });
+    expect(Object.keys(launched).sort()).toEqual(
+      ["kind", "readCleanupEvidence", "runId", "sessionKey", "workspaceDir"].sort(),
+    );
+
+    const [first, second] = await Promise.all([
+      launched.readCleanupEvidence(),
+      launched.readCleanupEvidence(),
+    ]);
+
+    expect(first).toMatchObject({ state: "CONFIRMED", ...expected });
+    expect(second).toBe(first);
+    expect(readFinalEvidence).toHaveBeenCalledTimes(2);
+    expect(finalizeCleanup).toHaveBeenCalledTimes(1);
+    expect(finalizeCleanup).toHaveBeenCalledWith(expected);
+  });
+
+  it("keeps cleanup UNKNOWN without confirmed final evidence or a complete exact receipt", async () => {
+    const expected = Object.freeze({
+      runId: "native-source-v7-unknown",
+      sessionKey: "agent:dev-host:subagent:workboard-readiness1-v7-unknown",
+      workspaceDir: "/state/worktrees/wt-v7-unknown",
+    });
+    let terminal: Readiness1SourceRunFinalEvidence = Object.freeze({
+      kind: "openclaw.readiness1.source-run-final-evidence.v1",
+      state: "UNKNOWN",
+      ...expected,
+      providerStarted: false,
+    });
+    const v6: Readiness1SourceRunBindingV6 = Object.freeze({
+      kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+      launch: async () =>
+        Object.freeze({
+          kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+          ...expected,
+          readFinalEvidence: async () => terminal,
+        }),
+    });
+    const finalizeCleanup = vi.fn(async () =>
+      Object.freeze({
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        workspaceDir: "/state/worktrees/other-v7-unknown",
+        processStopped: true,
+        groupStopped: true,
+        containerRemoved: true,
+        lsofClear: true,
+        runLeaseReleased: true,
+        workspaceReleased: true,
+        workspaceRemoved: true,
+      }),
+    );
+    const binding = createReadiness1SourceRunBindingV7({
+      v6,
+      assertCurrent: vi.fn(),
+      finalizeCleanup,
+    });
+    if (!binding) throw new Error("Readiness #1 source run v7 binding was not created");
+    const launched = await binding.launch({
+      taskNodeId: "TASK_source_v7_unknown",
+      ticketId: "ticket-source-v7-unknown",
+      beforeProvider: async () => {},
+    });
+
+    await expect(launched.readCleanupEvidence()).resolves.toMatchObject({ state: "UNKNOWN" });
+    expect(finalizeCleanup).not.toHaveBeenCalled();
+
+    terminal = Object.freeze({
+      kind: "openclaw.readiness1.source-run-final-evidence.v1",
+      state: "CONFIRMED",
+      ...expected,
+      providerStarted: true,
+      endedAt: 1_700_000_000_000,
+      usage: 42,
+      result: Object.freeze({
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        digest: "f".repeat(64),
+        byteLength: 128,
+      }),
+      snapshot: Object.freeze({
+        workspaceDir: expected.workspaceDir,
+        head: "a".repeat(40),
+        indexDigest: "b".repeat(64),
+        dirty: "",
+      }),
+    });
+    await expect(launched.readCleanupEvidence()).resolves.toMatchObject({ state: "UNKNOWN" });
+    await expect(launched.readCleanupEvidence()).resolves.toMatchObject({ state: "UNKNOWN" });
+    expect(finalizeCleanup).toHaveBeenCalledTimes(1);
+    expect(createReadiness1SourceRunBindingV7({ v6, assertCurrent: vi.fn() })).toBeUndefined();
   });
 
   it("retains the exclusive workspace when a failure follows native provider admission", async () => {

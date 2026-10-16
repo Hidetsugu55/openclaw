@@ -6,10 +6,15 @@ import type {
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import {
+  assessReadiness1SourceRunCleanupEvidence,
   assessReadiness1SourceRunFinalEvidence,
+  READINESS1_SOURCE_RUN_CLEANUP_EVIDENCE_KIND,
+  READINESS1_SOURCE_RUN_FINAL_EVIDENCE_KIND,
+  type Readiness1SourceRunCleanupEvidence,
   type Readiness1SourceRunDurableResult,
   type Readiness1SourceRunFinalEvidence,
   type Readiness1SourceRunFinalSnapshot,
+  type Readiness1SourceRunIdentity,
 } from "./readiness1-source-run-evidence.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
@@ -21,6 +26,7 @@ const READINESS1_SOURCE_RUN_BINDING_V3_KIND = "openclaw.readiness1.source-run-bi
 const READINESS1_SOURCE_RUN_BINDING_V4_KIND = "openclaw.readiness1.source-run-binding.v4";
 const READINESS1_SOURCE_RUN_BINDING_V5_KIND = "openclaw.readiness1.source-run-binding.v5";
 const READINESS1_SOURCE_RUN_BINDING_V6_KIND = "openclaw.readiness1.source-run-binding.v6";
+const READINESS1_SOURCE_RUN_BINDING_V7_KIND = "openclaw.readiness1.source-run-binding.v7";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -192,6 +198,48 @@ export type Readiness1SourceRunBindingV6 = Readonly<{
   launch: (
     request: Readiness1SourceRunLaunchRequest,
   ) => Promise<Readiness1SourceRunFinalEvidenceLaunch>;
+}>;
+
+/**
+ * The host finalizer is the only place that may perform lossless cleanup. Its
+ * receipt is intentionally run-bound and excludes paths, lease IDs, PIDs, and
+ * provider payloads from the controller-facing surface.
+ */
+export type Readiness1SourceRunCleanupReceipt = Readonly<{
+  runId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  processStopped?: boolean;
+  groupStopped?: boolean;
+  containerRemoved?: boolean;
+  lsofClear?: boolean;
+  runLeaseReleased?: boolean;
+  workspaceReleased?: boolean;
+  workspaceRemoved?: boolean;
+}>;
+
+export type Readiness1SourceRunCleanupFinalizer = (
+  expected: Readiness1SourceRunIdentity,
+) => Promise<Readiness1SourceRunCleanupReceipt>;
+
+/**
+ * V7 adds a separately owned cleanup receipt after V6 final evidence. The
+ * finalizer stays absent until the native runner can attest every physical
+ * resource for this exact run; callers never infer facts from a terminal run.
+ */
+export type Readiness1SourceRunCleanupEvidenceLaunch = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V7_KIND;
+  runId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  readCleanupEvidence: () => Promise<Readiness1SourceRunCleanupEvidence>;
+}>;
+
+export type Readiness1SourceRunBindingV7 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V7_KIND;
+  launch: (
+    request: Readiness1SourceRunLaunchRequest,
+  ) => Promise<Readiness1SourceRunCleanupEvidenceLaunch>;
 }>;
 
 type Readiness1SourceRunLeaseGuard = Readonly<{
@@ -1049,6 +1097,86 @@ export function createReadiness1SourceRunBindingV6(params: {
   });
 }
 
+function unknownCleanupEvidence(
+  expected: Readiness1SourceRunIdentity,
+): Readiness1SourceRunCleanupEvidence {
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_CLEANUP_EVIDENCE_KIND,
+    state: "UNKNOWN",
+    runId: expected.runId,
+    sessionKey: expected.sessionKey,
+    workspaceDir: expected.workspaceDir,
+  });
+}
+
+/**
+ * V7 deliberately cannot manufacture cleanup facts from V6, `agent.wait`, or
+ * a successful worktree removal. A native, run-bound finalizer must attest all
+ * resources before this capability is made available by the host resolver.
+ */
+export function createReadiness1SourceRunBindingV7(params: {
+  v6?: Readiness1SourceRunBindingV6;
+  assertCurrent: () => void;
+  finalizeCleanup?: Readiness1SourceRunCleanupFinalizer;
+}): Readiness1SourceRunBindingV7 | undefined {
+  const v6 = params.v6;
+  const finalizeCleanup = params.finalizeCleanup;
+  if (!v6 || !finalizeCleanup) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V7_KIND,
+    launch: async (request) => {
+      const launched = await v6.launch(request);
+      const expected = Object.freeze({
+        runId: launched.runId,
+        sessionKey: launched.sessionKey,
+        workspaceDir: launched.workspaceDir,
+      });
+      let finalization: Promise<Readiness1SourceRunCleanupEvidence> | undefined;
+      return Object.freeze({
+        kind: READINESS1_SOURCE_RUN_BINDING_V7_KIND,
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        workspaceDir: expected.workspaceDir,
+        readCleanupEvidence: async () => {
+          let terminal: Readiness1SourceRunFinalEvidence;
+          try {
+            terminal = await launched.readFinalEvidence();
+          } catch {
+            return unknownCleanupEvidence(expected);
+          }
+          if (
+            terminal.kind !== READINESS1_SOURCE_RUN_FINAL_EVIDENCE_KIND ||
+            terminal.state !== "CONFIRMED" ||
+            terminal.runId !== expected.runId ||
+            terminal.sessionKey !== expected.sessionKey ||
+            terminal.workspaceDir !== expected.workspaceDir
+          ) {
+            return unknownCleanupEvidence(expected);
+          }
+          if (!finalization) {
+            finalization = (async () => {
+              try {
+                params.assertCurrent();
+                const observed = await finalizeCleanup(expected);
+                params.assertCurrent();
+                if (observed.workspaceDir !== expected.workspaceDir) {
+                  return unknownCleanupEvidence(expected);
+                }
+                return assessReadiness1SourceRunCleanupEvidence({ expected, terminal, observed });
+              } catch {
+                return unknownCleanupEvidence(expected);
+              }
+            })();
+          }
+          return await finalization;
+        },
+      });
+    },
+  });
+}
+
 export {
   READINESS1_HOST_BINDING_KIND,
   READINESS1_PLUGIN_ID,
@@ -1057,4 +1185,5 @@ export {
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
   READINESS1_SOURCE_RUN_BINDING_V5_KIND,
   READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V7_KIND,
 };
