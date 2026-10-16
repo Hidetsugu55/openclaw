@@ -453,7 +453,7 @@ describe("createReadiness1HostBinding", () => {
     expect(runWithExecutionControl).not.toHaveBeenCalled();
   });
 
-  it("launches only one fixed source context and rechecks the source session at native admission", async () => {
+  it("retains one fixed source context after native admission until a later evidence binding exists", async () => {
     const taskNodeId = "TASK_source_v4_123";
     const ticketId = "ticket-source-v4-123";
     const descriptor = {
@@ -566,12 +566,15 @@ describe("createReadiness1HostBinding", () => {
     expect(runWithExecutionControl.mock.calls[0]?.[0]).not.toHaveProperty("toolsAlsoAllow");
     expect(assertSourceSession).toHaveBeenCalledTimes(2);
     expect(beforeProvider).toHaveBeenCalledTimes(1);
+    expect(Object.keys(launched).sort()).toEqual(
+      ["awaitTerminal", "kind", "runId", "sessionKey", "workspaceDir"].sort(),
+    );
+    expect(launched).not.toHaveProperty("release");
     await expect(launched.awaitTerminal()).resolves.toEqual({ status: "timeout" });
     expect(waitForRun).toHaveBeenCalledWith({ runId: "native-source-run", timeoutMs: 30_000 });
-    await expect(launched.release()).resolves.toBeUndefined();
-    await expect(launched.awaitTerminal()).rejects.toThrow("unavailable after release");
-    expect(releaseRunLease).toHaveBeenCalledTimes(1);
-    expect(releaseWorkspace).toHaveBeenCalledWith({ path: descriptor.contract.root });
+    await expect(launched.awaitTerminal()).resolves.toEqual({ status: "timeout" });
+    expect(releaseRunLease).not.toHaveBeenCalled();
+    expect(releaseWorkspace).not.toHaveBeenCalled();
   });
 
   it("retains the exclusive workspace when a failure follows native provider admission", async () => {

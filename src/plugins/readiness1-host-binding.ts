@@ -102,9 +102,10 @@ export type Readiness1SourceRunLaunchRequest = Readonly<{
 }>;
 
 /**
- * The opaque launch receipt retains the exclusive workspace lease. A future
- * lifecycle owner may release it only after it has independently produced a
- * terminal and cleanup receipt; this binding never accepts a path or lease ID.
+ * The opaque launch receipt retains the exclusive workspace lease. It exposes
+ * no release operation: a later host-only lifecycle binding must first prove
+ * final and cleanup evidence before it can introduce a separately reviewed
+ * lossless release path. This binding never accepts a path or lease ID.
  */
 export type Readiness1SourceRunLaunch = Readonly<{
   kind: typeof READINESS1_SOURCE_RUN_BINDING_V4_KIND;
@@ -113,7 +114,6 @@ export type Readiness1SourceRunLaunch = Readonly<{
   workspaceDir: string;
   /** Waits only for this exact held run with a host-fixed observation budget. */
   awaitTerminal: () => Promise<AgentWaitResult>;
-  release: () => Promise<void>;
 }>;
 
 /**
@@ -776,16 +776,12 @@ export function createReadiness1SourceRunBindingV4(params: {
           }
           return Object.freeze({ result, context });
         });
-        let releaseStarted = false;
         return Object.freeze({
           kind: READINESS1_SOURCE_RUN_BINDING_V4_KIND,
           runId: accepted.result.runId,
           sessionKey: accepted.result.sessionKey,
           workspaceDir: accepted.context.workspaceDir,
           awaitTerminal: async () => {
-            if (releaseStarted) {
-              throw new Error("Readiness #1 source terminal wait is unavailable after release.");
-            }
             params.assertCurrent();
             const wait = await waitForRun({
               runId: accepted.result.runId,
@@ -793,10 +789,6 @@ export function createReadiness1SourceRunBindingV4(params: {
             });
             params.assertCurrent();
             return wait;
-          },
-          release: async () => {
-            releaseStarted = true;
-            await lease.release();
           },
         });
       } catch (error) {
