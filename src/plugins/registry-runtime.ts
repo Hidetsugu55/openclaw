@@ -22,6 +22,7 @@ import {
   createReadiness1HostBinding,
   createReadiness1SourceRunBindingV2,
   createReadiness1SourceRunBindingV3,
+  READINESS1_PLUGIN_ID,
   type Readiness1HostBinding,
   type Readiness1SourceRunBindingV2,
   type Readiness1SourceRunBindingV3,
@@ -327,9 +328,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               existing.sessionRoot !== context.sessionRoot ||
               existing.spawnedCwd !== context.cwd ||
               existing.spawnedWorkspaceDir !== context.workspaceDir ||
-              existing.permissionMode !== "workspace"
+              existing.permissionMode !== "workspace" ||
+              existing.sandbox !== "required"
             ) {
-              throw new Error("Readiness #1 source session workspace identity drift.");
+              throw new Error("Readiness #1 source session security identity drift.");
             }
             return;
           }
@@ -341,6 +343,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             spawnedCwd: context.cwd,
             sessionRoot: context.sessionRoot,
             permissionMode: "workspace",
+            sandbox: "required",
             initialEntry: { agentHarnessId: "openclaw" },
           });
           assertRuntimeCurrent();
@@ -350,9 +353,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             created.entry.sessionRoot !== context.sessionRoot ||
             created.entry.spawnedWorkspaceDir !== context.workspaceDir ||
             created.entry.spawnedCwd !== context.cwd ||
-            created.entry.permissionMode !== "workspace"
+            created.entry.permissionMode !== "workspace" ||
+            created.entry.sandbox !== "required"
           ) {
-            throw new Error("Readiness #1 source session workspace identity drift.");
+            throw new Error("Readiness #1 source session security identity drift.");
           }
         },
         openLedgerStore: () =>
@@ -613,6 +617,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               const { assertOwnedHarness, assertReservedSessionKeyOwned } =
                 await loadSessionOwnership();
               return await runWithPluginScope(async () => {
+                if (
+                  params.sandbox === "required" &&
+                  (record.id !== READINESS1_PLUGIN_ID || record.origin !== "bundled")
+                ) {
+                  throw new Error(
+                    `Plugin "${pluginId}" is not authorized to require a source session sandbox.`,
+                  );
+                }
                 const runtimeOwnerCount = [
                   "agentHarnessId" in params.initialEntry,
                   "cliBackendId" in params.initialEntry,

@@ -178,6 +178,40 @@ describe("plugin runtime session creation", () => {
     });
   });
 
+  it("persists a required sandbox as part of trusted session creation", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-required-sandbox-session" },
+      async (state) => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:harness:openclaw:source-worktree";
+        const sourceWorkspace = path.join(state.workspaceDir, "source-worktree");
+        const cfg = { agents: { defaults: { workspace: state.workspaceDir } } };
+        fs.mkdirSync(sourceWorkspace, { recursive: true });
+        const created = await runtime.session.createSessionEntry({
+          cfg,
+          key,
+          spawnedWorkspaceDir: sourceWorkspace,
+          spawnedCwd: sourceWorkspace,
+          sessionRoot: sourceWorkspace,
+          permissionMode: "workspace",
+          sandbox: "required",
+          initialEntry: { agentHarnessId: "openclaw" },
+        });
+
+        expect(created.entry).toMatchObject({
+          sandbox: "required",
+          spawnedWorkspaceDir: sourceWorkspace,
+          spawnedCwd: sourceWorkspace,
+          sessionRoot: sourceWorkspace,
+          permissionMode: "workspace",
+        });
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toEqual(created.entry);
+      },
+    );
+  });
+
   // Plugin-owned CLI fork creation with colors lives in runtime-agent.session-color.test.ts.
 
   it("rolls back the exact created entry and transcript when initialization fails", async () => {

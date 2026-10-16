@@ -319,6 +319,7 @@ async function createSessionEntry(
           const expectedSpawnedWorkspaceDir = params.spawnedWorkspaceDir?.trim() || undefined;
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
+          const expectedSandbox = params.sandbox;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
           const matchingAcpMeta = acpInitial
@@ -347,6 +348,7 @@ async function createSessionEntry(
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
             matchingEntry.sessionRoot === expectedSessionRoot &&
             matchingEntry.permissionMode === params.permissionMode &&
+            matchingEntry.sandbox === expectedSandbox &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
@@ -426,6 +428,7 @@ async function createSessionEntry(
                 type: "system",
                 ...(pluginInitial?.pluginOwnerId ? { id: pluginInitial.pluginOwnerId } : {}),
               },
+              ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
             },
             commandSource: "plugin-runtime",
             ...(initializesAfterCreate ? { afterCreate: runAfterCreate } : {}),

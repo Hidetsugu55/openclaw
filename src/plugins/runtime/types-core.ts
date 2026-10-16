@@ -107,6 +107,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: RuntimeSessionEntry["permissionMode"];
+  /** Host-only creation requirement; the session must fail closed without a sandbox. */
+  sandbox?: "required";
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
