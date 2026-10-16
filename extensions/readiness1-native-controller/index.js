@@ -87,10 +87,10 @@ function hostBindingOf(api) {
     binding
       && typeof binding === 'object'
       && Object.isFrozen(binding)
-      && Object.keys(binding).sort().join(',') === 'kind,openLedgerStore,readCanonicalTask'
+      && Object.keys(binding).sort().join(',') === 'kind,openLedgerStore,readCanonicalDescriptor'
       && binding.kind === 'openclaw.readiness1.host-binding.v1'
       && typeof binding.openLedgerStore === 'function'
-      && typeof binding.readCanonicalTask === 'function',
+      && typeof binding.readCanonicalDescriptor === 'function',
     'READINESS1_HOST_BINDING_INVALID',
   );
   return binding;
@@ -100,7 +100,7 @@ function createStatusTool({ config, ctx, binding }) {
   const ledger = createLedger(binding.openLedgerStore());
   const bridge = createNativeBridge({
     config,
-    readCanonicalTask: binding.readCanonicalTask,
+    readCanonicalDescriptor: binding.readCanonicalDescriptor,
   });
   return createReadinessTool({
     config,

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createReadinessTool } from '../src/controller.js';
 import { createLedger } from '../src/ledger.js';
 import { createNativeBridge } from '../src/native-bridge.js';
-import { activate, config, contract, makeTool, memoryStore } from './helpers.mjs';
+import { activate, config, contract, descriptor, makeTool, memoryStore } from './helpers.mjs';
 
 test('injected canonical controller path is explicitly fixture-only', () => {
   assert.throws(() => createReadinessTool({}), /CANONICAL_CONTROLLER_FIXTURE_ONLY/);
@@ -18,13 +18,30 @@ test('host-issued ledger binding is the only non-fixture constructor path', () =
       sandboxed: false, assertInvocationCurrent() {},
     },
     ledger: createLedger(memoryStore()),
-    bridge: createNativeBridge({ config }),
+    bridge: createNativeBridge({ config, readCanonicalDescriptor: async () => descriptor }),
     hostBinding: Object.freeze({
       kind: 'openclaw.readiness1.host-binding.v1',
       openLedgerStore: () => memoryStore(),
-      readCanonicalTask: async () => contract,
+      readCanonicalDescriptor: async () => descriptor,
     }),
   }));
+});
+
+test('host canonical descriptor, rather than plugin config, selects the public Task', async () => {
+  const hostContract = Object.freeze({ ...contract, revisionHash: '9'.repeat(64) });
+  const hostDescriptor = Object.freeze({ ...descriptor, contract: hostContract, instructions: 'Host-owned canonical instructions.' });
+  let reads = 0;
+  const bridge = createNativeBridge({
+    config: Object.freeze({ ...config, tasks: [] }),
+    readCanonicalDescriptor: async (taskNodeId) => {
+      reads += 1;
+      assert.equal(taskNodeId, contract.taskNodeId);
+      return hostDescriptor;
+    },
+  });
+
+  assert.deepEqual(await bridge.readCanonicalTask(contract.taskNodeId), hostContract);
+  assert.equal(reads, 1);
 });
 
 test('thin adapter preserves canonical authority through native receipt, terminal readback, and cleanup', async () => {

@@ -59,12 +59,12 @@ describe("createReadiness1HostBinding", () => {
     expect(binding?.openLedgerStore()).toBe(store);
     expect(assertCurrent).toHaveBeenCalledTimes(1);
     expect(openLedgerStore).toHaveBeenCalledTimes(1);
-    await expect(binding?.readCanonicalTask("status:task")).rejects.toThrow(
+    await expect(binding?.readCanonicalDescriptor("status:task")).rejects.toThrow(
       "canonical Task is unavailable",
     );
     expect(openCanonicalTaskStore).toHaveBeenCalledTimes(1);
     expect(taskStore.lookup).toHaveBeenCalledWith("status:task");
-    await expect(binding?.readCanonicalTask("invalid task id")).rejects.toThrow(
+    await expect(binding?.readCanonicalDescriptor("invalid task id")).rejects.toThrow(
       "canonical Task id is invalid",
     );
   });
@@ -117,12 +117,12 @@ describe("createReadiness1HostBinding", () => {
         });
         const task = { taskNodeId: "status:task", source: "host-admin-apply" };
         await canonicalTasks.register("status:task", task);
-        await expect(binding.readCanonicalTask("status:task")).resolves.toEqual(task);
+        await expect(binding.readCanonicalDescriptor("status:task")).resolves.toEqual(task);
 
         revokePluginRecord(builder.registry, record);
         expect(() => binding.openLedgerStore()).toThrow("runtime is no longer active");
         await expect(ledger.lookup("status:task")).rejects.toThrow("runtime is no longer active");
-        await expect(binding.readCanonicalTask("status:task")).rejects.toThrow(
+        await expect(binding.readCanonicalDescriptor("status:task")).rejects.toThrow(
           "runtime is no longer active",
         );
       } finally {

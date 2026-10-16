@@ -5,10 +5,15 @@ export function nativeWorkerSessionKey(agentId, taskNodeId) {
   return `agent:${agentId}:subagent:workboard-readiness1-${digest(taskNodeId).slice(0, 24)}`;
 }
 
-export function createNativeBridge({ config, readCanonicalTask: readHostCanonicalTask, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
+export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
   const descriptors = new Map(config.tasks.map((descriptor) => [descriptor.contract.taskNodeId, descriptor]));
 
-  function descriptor(taskNodeId) {
+  async function descriptor(taskNodeId) {
+    if (typeof readHostCanonicalDescriptor === 'function') {
+      const value = await readHostCanonicalDescriptor(taskNodeId);
+      requireThat(value && typeof value === 'object' && !Array.isArray(value), 'canonical Task descriptor is unavailable');
+      return value;
+    }
     const value = descriptors.get(taskNodeId);
     requireThat(value, 'canonical Task is not configured');
     return value;
@@ -18,16 +23,13 @@ export function createNativeBridge({ config, readCanonicalTask: readHostCanonica
     requireThat(typeof snapshotWorkspace === 'function', 'SOURCE_INTEGRITY_NATIVE_SURFACE_UNAVAILABLE');
     const result = await snapshotWorkspace(task, workspace);
     requireThat(result?.repo === task.repo && result.worktree === task.root && result.head === task.head, 'source integrity snapshot mismatch');
-    requireThat(result.dirty === '' && result.indexDigest === descriptor(task.taskNodeId).indexDigest, 'source integrity dirty/index mismatch');
+    requireThat(result.dirty === '' && result.indexDigest === (await descriptor(task.taskNodeId)).indexDigest, 'source integrity dirty/index mismatch');
     return result;
   }
 
   return Object.freeze({
     readCanonicalTask: async (taskNodeId) => {
-      if (typeof readHostCanonicalTask === 'function') {
-        return readHostCanonicalTask(taskNodeId);
-      }
-      return descriptor(taskNodeId).contract;
+      return (await descriptor(taskNodeId)).contract;
     },
 
     async assertOwnerApprovalAvailable() {
@@ -42,7 +44,7 @@ export function createNativeBridge({ config, readCanonicalTask: readHostCanonica
     },
 
     async prepareWorkspace(task, { claimId, assertCurrent }) {
-      const fixed = descriptor(task.taskNodeId);
+      const fixed = await descriptor(task.taskNodeId);
       assertCurrent();
       const sessionKey = nativeWorkerSessionKey(config.workerAgentId, task.taskNodeId);
       requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
@@ -61,7 +63,7 @@ export function createNativeBridge({ config, readCanonicalTask: readHostCanonica
     },
 
     async launchReserved({ contract, workspace, ticketId, assertCurrent, admit }) {
-      const fixed = descriptor(contract.taskNodeId);
+      const fixed = await descriptor(contract.taskNodeId);
       requireThat(workspace.path === contract.root && workspace.sessionKey === nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId), 'native launch workspace/session mismatch');
       requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
       let admitted = false;
