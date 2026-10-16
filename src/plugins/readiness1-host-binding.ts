@@ -10,6 +10,7 @@ import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/typ
 const READINESS1_PLUGIN_ID = "readiness1-native-controller";
 const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
 const READINESS1_SOURCE_RUN_BINDING_V2_KIND = "openclaw.readiness1.source-run-binding.v2";
+const READINESS1_SOURCE_RUN_BINDING_V3_KIND = "openclaw.readiness1.source-run-binding.v3";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -77,6 +78,16 @@ export type Readiness1SourceRunBindingV2 = Readonly<{
    * Builds a host-owned, exclusive pre-spawn binding only. This contract never
    * calls a provider or a public Gateway dispatch route.
    */
+  prepare: (request: Readiness1SourceRunPrepareRequest) => Promise<Readiness1SourceRunLease>;
+}>;
+
+/**
+ * v3 adds the Gateway session-root binding before any future provider launch.
+ * It deliberately returns the v2 opaque lease rather than accepting a caller
+ * supplied path, session, or worktree identifier.
+ */
+export type Readiness1SourceRunBindingV3 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V3_KIND;
   prepare: (request: Readiness1SourceRunPrepareRequest) => Promise<Readiness1SourceRunLease>;
 }>;
 
@@ -532,8 +543,53 @@ export function createReadiness1SourceRunBindingV2(params: {
   });
 }
 
+/**
+ * A separate contract keeps v2's lease shape stable. It binds the Gateway
+ * session root before a later private launch path can call a provider. No
+ * bundled extension code or public dispatch route currently reads this capability.
+ */
+export function createReadiness1SourceRunBindingV3(params: {
+  record: Pick<PluginRecord, "id" | "origin">;
+  assertCurrent: () => void;
+  openLedgerStore: () => PluginStateKeyedStore<unknown>;
+  openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
+  runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
+  acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
+  /** Host resolver closure; never part of PluginRuntime or plugin input. */
+  bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+}): Readiness1SourceRunBindingV3 | undefined {
+  const v2 = createReadiness1SourceRunBindingV2(params);
+  if (!v2 || !params.bindSourceSession) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V3_KIND,
+    prepare: async (request) => {
+      const lease = await v2.prepare(request);
+      try {
+        await lease.withContext(async (context) => {
+          await params.bindSourceSession?.(context);
+        });
+        return lease;
+      } catch (error) {
+        try {
+          await lease.release();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Readiness #1 source session binding failed with uncertain cleanup.",
+          );
+        }
+        throw error;
+      }
+    },
+  });
+}
+
 export {
   READINESS1_HOST_BINDING_KIND,
   READINESS1_PLUGIN_ID,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V3_KIND,
 };

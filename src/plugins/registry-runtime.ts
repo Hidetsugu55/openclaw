@@ -5,6 +5,7 @@ import { createChannelIngressDrain } from "../channels/message/ingress-drain.js"
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -20,8 +21,10 @@ import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
   createReadiness1HostBinding,
   createReadiness1SourceRunBindingV2,
+  createReadiness1SourceRunBindingV3,
   type Readiness1HostBinding,
   type Readiness1SourceRunBindingV2,
+  type Readiness1SourceRunBindingV3,
 } from "./readiness1-host-binding.js";
 import {
   capturePluginLifecycleAuthority,
@@ -202,6 +205,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     };
     let readiness1HostBinding: Readiness1HostBinding | null | undefined;
     let readiness1SourceRunBindingV2: Readiness1SourceRunBindingV2 | null | undefined;
+    let readiness1SourceRunBindingV3: Readiness1SourceRunBindingV3 | null | undefined;
     const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
       if (readiness1HostBinding !== undefined) {
         return readiness1HostBinding ?? undefined;
@@ -278,6 +282,86 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       readiness1SourceRunBindingV2 = binding ?? null;
       return binding;
     };
+    const resolveReadiness1SourceRunBindingV3 = (): Readiness1SourceRunBindingV3 | undefined => {
+      if (readiness1SourceRunBindingV3 !== undefined) {
+        return readiness1SourceRunBindingV3 ?? undefined;
+      }
+      const binding = createReadiness1SourceRunBindingV3({
+        record,
+        assertCurrent: assertRuntimeCurrent,
+        openCanonicalTaskStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-canonical-tasks",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+        runWithExecutionControl: (params, control) =>
+          runtime.subagent.runWithExecutionControl(params, control),
+        workspace: {
+          config: runtime.config,
+          sandbox: runtime.sandbox,
+          worktrees: runtime.worktrees,
+        },
+        acquireSourceRunLease: async (worktreeId) => {
+          const lease = await acquireWorktreeRunLease(worktreeId, { exclusive: true });
+          return Object.freeze({ release: () => lease.releaseWithReceipt() });
+        },
+        bindSourceSession: async (context) => {
+          assertRuntimeCurrent();
+          if (
+            context.sessionRoot !== context.workspaceDir ||
+            context.workspaceDir !== context.cwd
+          ) {
+            throw new Error("Readiness #1 source session root/workspace/cwd drift.");
+          }
+          const existing = runtime.agent.session.getSessionEntry({
+            agentId: context.agentId,
+            sessionKey: context.sessionKey,
+            readConsistency: "latest",
+          });
+          if (existing) {
+            if (
+              existing.sessionRoot !== context.sessionRoot ||
+              existing.spawnedCwd !== context.cwd
+            ) {
+              throw new Error("Readiness #1 source session workspace identity drift.");
+            }
+            return;
+          }
+          const created = await runtime.agent.session.createSessionEntry({
+            cfg: structuredClone(runtime.config.current()) as OpenClawConfig,
+            key: context.sessionKey,
+            agentId: context.agentId,
+            spawnedCwd: context.cwd,
+            sessionRoot: context.sessionRoot,
+            initialEntry: { agentHarnessId: "openclaw" },
+          });
+          assertRuntimeCurrent();
+          if (
+            created.key !== context.sessionKey ||
+            created.agentId !== context.agentId ||
+            created.entry.sessionRoot !== context.sessionRoot ||
+            created.entry.spawnedCwd !== context.cwd
+          ) {
+            throw new Error("Readiness #1 source session workspace identity drift.");
+          }
+        },
+        openLedgerStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-controller-ledger",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+      });
+      readiness1SourceRunBindingV3 = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -314,6 +398,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "readiness1SourceRunBindingV2") {
           return resolveReadiness1SourceRunBindingV2();
+        }
+        if (prop === "readiness1SourceRunBindingV3") {
+          return resolveReadiness1SourceRunBindingV3();
         }
         if (prop === "state") {
           const baseState = getRuntimeProperty();

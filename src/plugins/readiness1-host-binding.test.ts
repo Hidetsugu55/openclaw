@@ -8,8 +8,10 @@ import { createPluginRecord } from "./loader-records.js";
 import {
   createReadiness1HostBinding,
   createReadiness1SourceRunBindingV2,
+  createReadiness1SourceRunBindingV3,
   READINESS1_HOST_BINDING_KIND,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V3_KIND,
 } from "./readiness1-host-binding.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -374,6 +376,78 @@ describe("createReadiness1HostBinding", () => {
     expect(releaseWorkspace).not.toHaveBeenCalled();
   });
 
+  it("binds one exact source session root and releases on binding failure", async () => {
+    const taskNodeId = "TASK_source_v3_123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v3",
+      },
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v3-123",
+      worktreeBranch: "openclaw/readiness1-task-source-v3-123",
+    };
+    const releaseRunLease = vi.fn(async () => true);
+    const releaseWorkspace = vi.fn(async () => {});
+    let bindAttempt = 0;
+    const bindSourceSession = vi.fn(async (context) => {
+      expect(context.sessionRoot).toBe(descriptor.contract.root);
+      expect(context.workspaceDir).toBe(context.sessionRoot);
+      expect(context.cwd).toBe(context.sessionRoot);
+      if (bindAttempt++ > 0) {
+        throw new Error("session workspace drift");
+      }
+    });
+    const binding = createReadiness1SourceRunBindingV3({
+      acquireSourceRunLease: vi.fn(async () => ({ release: releaseRunLease })),
+      bindSourceSession,
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl: vi.fn() as never,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v3",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: releaseWorkspace,
+          removeIfLossless: vi.fn(async () => true),
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run v3 binding was not created");
+
+    expect(binding.kind).toBe(READINESS1_SOURCE_RUN_BINDING_V3_KIND);
+    const lease = await binding.prepare({ taskNodeId, claimId: "ticket-source-v3-123" });
+    await expect(lease.release()).resolves.toBeUndefined();
+    await expect(binding.prepare({ taskNodeId, claimId: "ticket-source-v3-123" })).rejects.toThrow(
+      "session workspace drift",
+    );
+    expect(bindSourceSession).toHaveBeenCalledTimes(2);
+    expect(releaseRunLease).toHaveBeenCalledTimes(2);
+    expect(releaseWorkspace).toHaveBeenCalledTimes(2);
+    expect(releaseWorkspace).toHaveBeenLastCalledWith({ path: descriptor.contract.root });
+  });
+
   it("removes a mismatched host worktree and refuses the source Task", async () => {
     const taskNodeId = "TASK_source_456";
     const claimId = "ticket-source-456";
@@ -434,7 +508,10 @@ describe("createReadiness1HostBinding", () => {
     const resolveBinding = (
       id: string,
       origin: "bundled" | "global",
-      property: "readiness1HostBinding" | "readiness1SourceRunBindingV2" = "readiness1HostBinding",
+      property:
+        | "readiness1HostBinding"
+        | "readiness1SourceRunBindingV2"
+        | "readiness1SourceRunBindingV3" = "readiness1HostBinding",
     ) => {
       const builder = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
@@ -460,9 +537,13 @@ describe("createReadiness1HostBinding", () => {
     expect(
       resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV2"),
     ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V2_KIND });
+    expect(
+      resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV3"),
+    ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V3_KIND });
     expect(resolveBinding("readiness1-native-controller", "global")).toBeUndefined();
     expect(resolveBinding("other", "bundled")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV2")).toBeUndefined();
+    expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV3")).toBeUndefined();
   });
 
   it("opens the real retained ledger and rejects a retired runtime", async () => {
