@@ -234,6 +234,8 @@ export type Readiness1SourceRunCleanupEvidenceLaunch = Readonly<{
   runId: string;
   sessionKey: string;
   workspaceDir: string;
+  /** Reads the held V6 evidence without starting cleanup. */
+  readFinalEvidence: () => Promise<Readiness1SourceRunFinalEvidence>;
   readCleanupEvidence: () => Promise<Readiness1SourceRunCleanupEvidence>;
 }>;
 
@@ -1221,6 +1223,7 @@ export function createReadiness1SourceRunBindingV7(params: {
         runId: expected.runId,
         sessionKey: expected.sessionKey,
         workspaceDir: expected.workspaceDir,
+        readFinalEvidence: () => launched.readFinalEvidence(),
         readCleanupEvidence: async () => {
           let terminal: Readiness1SourceRunFinalEvidence;
           try {

@@ -1087,8 +1087,16 @@ describe("createReadiness1HostBinding", () => {
     });
     expect(launched).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V7_KIND, ...expected });
     expect(Object.keys(launched).sort()).toEqual(
-      ["kind", "readCleanupEvidence", "runId", "sessionKey", "workspaceDir"].sort(),
+      [
+        "kind",
+        "readCleanupEvidence",
+        "readFinalEvidence",
+        "runId",
+        "sessionKey",
+        "workspaceDir",
+      ].sort(),
     );
+    await expect(launched.readFinalEvidence()).resolves.toBe(terminal);
 
     const [first, second] = await Promise.all([
       launched.readCleanupEvidence(),
@@ -1097,7 +1105,7 @@ describe("createReadiness1HostBinding", () => {
 
     expect(first).toMatchObject({ state: "CONFIRMED", ...expected });
     expect(second).toBe(first);
-    expect(readFinalEvidence).toHaveBeenCalledTimes(2);
+    expect(readFinalEvidence).toHaveBeenCalledTimes(3);
     expect(finalizeCleanup).toHaveBeenCalledTimes(1);
     expect(finalizeCleanup).toHaveBeenCalledWith(expected);
   });

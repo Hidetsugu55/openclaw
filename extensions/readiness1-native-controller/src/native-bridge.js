@@ -5,7 +5,7 @@ export function nativeWorkerSessionKey(agentId, taskNodeId) {
   return `agent:${agentId}:subagent:workboard-readiness1-${digest(taskNodeId).slice(0, 24)}`;
 }
 
-export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, runCanonicalReadOnly: runHostCanonicalReadOnly, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
+export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, runCanonicalReadOnly: runHostCanonicalReadOnly, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, sourceRunLifecycle, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
   const descriptors = new Map(config.tasks.map((descriptor) => [descriptor.contract.taskNodeId, descriptor]));
 
   async function descriptor(taskNodeId) {
@@ -54,7 +54,11 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
     },
 
     preflightDispatch() {
-      requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
+      if (sourceRunLifecycle) {
+        requireThat(typeof sourceRunLifecycle.launch === 'function' && typeof sourceRunLifecycle.observe === 'function' && typeof sourceRunLifecycle.cleanup === 'function', 'SOURCE_RUN_V7_LIFECYCLE_UNAVAILABLE');
+      } else {
+        requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
+      }
       requireThat(typeof snapshotWorkspace === 'function', 'SOURCE_INTEGRITY_PUBLIC_SURFACE_UNAVAILABLE');
       requireThat(typeof readCapacity === 'function', 'PROVIDER_CAPACITY_PUBLIC_SURFACE_UNAVAILABLE');
       requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
@@ -82,6 +86,7 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
     async launchReserved({ contract, workspace, ticketId, assertCurrent, admit }) {
       const fixed = await descriptor(contract.taskNodeId);
       requireThat(workspace.path === contract.root && workspace.sessionKey === nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId), 'native launch workspace/session mismatch');
+      if (sourceRunLifecycle) return sourceRunLifecycle.launch({ contract, workspace, ticketId, assertCurrent, admit });
       requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
       let admitted = false;
       const accepted = await startReservedExecution({
@@ -100,12 +105,14 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
     },
 
     async observeNativeRun(binding) {
+      if (sourceRunLifecycle) return sourceRunLifecycle.observe(Object.freeze({ ...binding }));
       requireThat(typeof observeNativeRun === 'function', 'NATIVE_OBSERVATION_CONTROLLER_WIRING_UNAVAILABLE');
       return observeNativeRun(Object.freeze({ ...binding }));
     },
 
     async cleanupWorkspace(task, workspace) {
       requireThat(workspace.path === task.root, 'cleanup worktree mismatch');
+      if (sourceRunLifecycle) return sourceRunLifecycle.cleanup(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace) }));
       requireThat(typeof cleanupWorkspace === 'function', 'LOSSLESS_CLEANUP_PUBLIC_SURFACE_UNAVAILABLE');
       return cleanupWorkspace(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace) }));
     },

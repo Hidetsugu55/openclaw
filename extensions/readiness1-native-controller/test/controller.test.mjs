@@ -168,10 +168,125 @@ test('typed observation mismatches, unobserved usage, and uncertain cleanup stay
   assert.equal(cleanup.task.cleanup, 'pending');
 });
 
-test('closed catalog rejects TaskFlow ids, fallback Tasks, and arbitrary overrides', async () => {
+test('fixture-only V7 lifecycle defers physical cleanup until final cleanup evidence', async () => {
+  const runId = 'native-source-v7-run';
+  const sessionKey = nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId);
+  let finalReads = 0;
+  let cleanupReads = 0;
+  const sourceRunBinding = Object.freeze({
+    kind: 'openclaw.readiness1.source-run-binding.v7',
+    async launch(request) {
+      assert.equal(request.taskNodeId, contract.taskNodeId);
+      await request.beforeProvider(Object.freeze({ runId, sessionKey }));
+      return Object.freeze({
+        kind: 'openclaw.readiness1.source-run-binding.v7',
+        runId,
+        sessionKey,
+        workspaceDir: contract.root,
+        async readFinalEvidence() {
+          finalReads += 1;
+          return Object.freeze({
+            kind: 'openclaw.readiness1.source-run-final-evidence.v1', state: 'CONFIRMED',
+            runId, sessionKey, workspaceDir: contract.root, providerStarted: true,
+            endedAt: 1_000, usage: 3,
+            result: Object.freeze({ runId, sessionKey, digest: 'd'.repeat(64), byteLength: 12 }),
+            snapshot: Object.freeze({ workspaceDir: contract.root, head: contract.head, indexDigest: 'c'.repeat(64), dirty: '' }),
+          });
+        },
+        async readCleanupEvidence() {
+          cleanupReads += 1;
+          return Object.freeze({
+            kind: 'openclaw.readiness1.source-run-cleanup-evidence.v1', state: 'CONFIRMED',
+            runId, sessionKey, workspaceDir: contract.root,
+          });
+        },
+      });
+    },
+  });
+  const { tool, calls } = makeTool({ sourceRunBinding });
+  let task = await activate(tool);
+  task = (await tool.execute('dispatch', { action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  assert.equal(task.status, 'RUNNING');
+  assert.equal(task.run.runId, runId);
+  assert.equal(calls.some(([name]) => name === 'provider.work'), false);
+  task = (await tool.execute('observe', { action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  assert.equal(task.status, 'ACTIVE');
+  assert.equal(task.cleanup, 'pending');
+  assert.equal(finalReads, 1);
+  assert.equal(cleanupReads, 0);
+  task = (await tool.execute('cleanup', { action: 'cleanup', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  assert.equal(task.status, 'DONE');
+  assert.equal(task.cleanup, 'pass');
+  assert.equal(cleanupReads, 1);
+  assert.equal(calls.some(([name]) => name === 'worktree.remove'), false);
+});
+
+test('fixture-only V7 lifecycle keeps an unconfirmed final result OUTCOME_UNKNOWN', async () => {
+  const runId = 'native-source-v7-unknown';
+  const sessionKey = nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId);
+  let cleanupReads = 0;
+  const sourceRunBinding = Object.freeze({
+    kind: 'openclaw.readiness1.source-run-binding.v7',
+    async launch(request) {
+      await request.beforeProvider(Object.freeze({ runId, sessionKey }));
+      return Object.freeze({
+        kind: 'openclaw.readiness1.source-run-binding.v7', runId, sessionKey, workspaceDir: contract.root,
+        async readFinalEvidence() {
+          return Object.freeze({ kind: 'openclaw.readiness1.source-run-final-evidence.v1', state: 'UNKNOWN', runId, sessionKey, workspaceDir: contract.root, providerStarted: false });
+        },
+        async readCleanupEvidence() {
+          cleanupReads += 1;
+          return Object.freeze({ kind: 'openclaw.readiness1.source-run-cleanup-evidence.v1', state: 'CONFIRMED', runId, sessionKey, workspaceDir: contract.root });
+        },
+      });
+    },
+  });
+  const { tool } = makeTool({ sourceRunBinding });
+  let task = await activate(tool);
+  task = (await tool.execute('dispatch', { action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  const observed = (await tool.execute('observe', { action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details;
+  assert.equal(observed.reason, 'NATIVE_OBSERVATION_UNKNOWN');
+  assert.equal(observed.task.status, 'OUTCOME_UNKNOWN');
+  assert.equal(cleanupReads, 0);
+});
+
+test('fixture-only V7 lifecycle keeps an unconfirmed cleanup receipt OUTCOME_UNKNOWN', async () => {
+  const runId = 'native-source-v7-cleanup-unknown';
+  const sessionKey = nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId);
+  const sourceRunBinding = Object.freeze({
+    kind: 'openclaw.readiness1.source-run-binding.v7',
+    async launch(request) {
+      await request.beforeProvider(Object.freeze({ runId, sessionKey }));
+      return Object.freeze({
+        kind: 'openclaw.readiness1.source-run-binding.v7', runId, sessionKey, workspaceDir: contract.root,
+        async readFinalEvidence() {
+          return Object.freeze({
+            kind: 'openclaw.readiness1.source-run-final-evidence.v1', state: 'CONFIRMED', runId, sessionKey, workspaceDir: contract.root, providerStarted: true, endedAt: 1_000, usage: 3,
+            result: Object.freeze({ runId, sessionKey, digest: 'd'.repeat(64), byteLength: 12 }),
+            snapshot: Object.freeze({ workspaceDir: contract.root, head: contract.head, indexDigest: 'c'.repeat(64), dirty: '' }),
+          });
+        },
+        async readCleanupEvidence() {
+          return Object.freeze({ kind: 'openclaw.readiness1.source-run-cleanup-evidence.v1', state: 'UNKNOWN', runId, sessionKey, workspaceDir: contract.root });
+        },
+      });
+    },
+  });
+  const { tool } = makeTool({ sourceRunBinding });
+  let task = await activate(tool);
+  task = (await tool.execute('dispatch', { action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  task = (await tool.execute('observe', { action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details.task;
+  const cleanup = (await tool.execute('cleanup', { action: 'cleanup', taskNodeId: contract.taskNodeId, expectedRevision: task.revision })).details;
+  assert.equal(cleanup.reason, 'CLEANUP_OUTCOME_UNKNOWN');
+  assert.equal(cleanup.task.status, 'OUTCOME_UNKNOWN');
+  assert.equal(cleanup.task.cleanup, 'pending');
+});
+
+test('closed catalog admits no fallback Task and rejects arbitrary overrides', async () => {
   const { tool } = makeTool();
   await assert.rejects(tool.execute('flow', { action: 'status', taskNodeId: contract.taskNodeId, flowId: 'legacy' }), /arbitrary input/);
-  await assert.rejects(tool.execute('fallback', { action: 'status', taskNodeId: 'TASK_unknown' }), /not configured/);
+  const unknown = await tool.execute('fallback', { action: 'status', taskNodeId: 'TASK_unknown' });
+  assert.deepEqual(unknown.details, { ok: true, task: null });
   await assert.rejects(tool.execute('repo', { action: 'approval.request', taskNodeId: contract.taskNodeId, repo: 'evil/repo' }), /arbitrary input/);
   await assert.rejects(tool.execute('path', { action: 'approval.request', taskNodeId: contract.taskNodeId, path: '/tmp/evil' }), /arbitrary input/);
   await assert.rejects(tool.execute('agent', { action: 'approval.request', taskNodeId: contract.taskNodeId, agentId: 'other' }), /arbitrary input/);

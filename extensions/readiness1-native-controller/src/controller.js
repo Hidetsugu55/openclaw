@@ -3,7 +3,7 @@ import { approvalCard, validateApprovalPolicy } from './core/approval.js';
 import {
   attachNativeRun, confirmWorkspace, launchOutcomeUnknown, nativeRunObservation,
   preLaunchAbortOutcomeUnknown, preLaunchAbortRecovered, reserveDispatch,
-  reserveWorkspace, settleObserved, workStarted, workspaceOutcomeUnknown,
+  reserveWorkspace, settleFinalEvidence, settleObserved, workStarted, workspaceOutcomeUnknown,
 } from './core/capacity.js';
 import { cleanupDecisionObserved, finishTask } from './core/lifecycle.js';
 import { notifyOwner } from './core/output.js';
@@ -383,11 +383,20 @@ export function createReadinessTool({
                 || !equal(latest.state.ticket.gate, { action, ...freshBinding })
             ) throw preLaunchBindingDrift();
           }
-          const writer = { id: ticketId, taskNodeId: task.taskNodeId, root: task.root, sessionKey: prepared.workspace.sessionKey, runId: ticketId };
+          let admittedWriter = null;
           launchAttempted = true;
           const accepted = await bridge.launchReserved({
             contract: task, workspace: prepared.workspace, ticketId, assertCurrent,
-            admit: async () => {
+            admit: async (identity = null) => {
+              requireThat(!admittedWriter, 'execution-start admission replay');
+              const writer = {
+                id: ticketId,
+                taskNodeId: task.taskNodeId,
+                root: task.root,
+                sessionKey: identity?.sessionKey ?? prepared.workspace.sessionKey,
+                runId: identity?.runId ?? ticketId,
+              };
+              requireThat(typeof writer.runId === 'string' && writer.runId.length > 0 && writer.sessionKey === prepared.workspace.sessionKey, 'native execution identity mismatch');
               record = await ledger.mutate(task.taskNodeId, record.revision, async (state) => {
                 requireThat(
                   !state.gate?.stopRequested
@@ -420,9 +429,10 @@ export function createReadinessTool({
                 }
                 return workStarted(state, { ticketId, writer });
               }, assertCurrent);
+              admittedWriter = Object.freeze(writer);
             },
           });
-          requireThat(accepted.runId === ticketId && accepted.sessionKey === writer.sessionKey, 'native accepted receipt mismatch');
+          requireThat(admittedWriter && accepted.runId === admittedWriter.runId && accepted.sessionKey === admittedWriter.sessionKey, 'native accepted receipt mismatch');
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => attachNativeRun(state, { ticketId, runId: accepted.runId, now: now() }), assertCurrent);
           return json({ ok: true, task: safeRecord(record) });
         } catch (error) {
@@ -497,14 +507,18 @@ export function createReadinessTool({
           return json({ ok: false, reason: 'NATIVE_OBSERVATION_UNKNOWN', task: safeRecord(record) });
         }
         if (observed.status === 'pending') return json({ ok: false, reason: 'NATIVE_RUN_PENDING', observation: { status: observed.status }, task: safeRecord(record) });
-        const exactTerminal = observed.status === 'ok' && observed.providerStarted === true && observed.terminalStatus === 'ok' && observed.processStopped === true && observed.groupStopped === true && observed.containerRemoved === true && observed.lsofClear === true && observed.cleanWorktree === true && observed.durableResults === true && observed.sideEffects === 'none' && Number.isSafeInteger(observed.usage) && observed.usage >= 0 && observed.usage <= record.state.reserved && observed.snapshot?.repo === task.repo && observed.snapshot.worktree === task.root && /^[a-f0-9]{40}$/.test(observed.snapshot.head) && typeof observed.snapshot.dirty === 'string' && /^[a-f0-9]{64}$/.test(observed.snapshot.indexDigest);
+        const cleanupDeferred = observed.cleanupDeferred === true;
+        const exactTerminal = observed.status === 'ok' && observed.providerStarted === true && observed.terminalStatus === 'ok' && (cleanupDeferred || (observed.processStopped === true && observed.groupStopped === true && observed.containerRemoved === true && observed.lsofClear === true)) && observed.cleanWorktree === true && observed.durableResults === true && observed.sideEffects === 'none' && Number.isSafeInteger(observed.usage) && observed.usage >= 0 && observed.usage <= record.state.reserved && observed.snapshot?.repo === task.repo && observed.snapshot.worktree === task.root && /^[a-f0-9]{40}$/.test(observed.snapshot.head) && typeof observed.snapshot.dirty === 'string' && /^[a-f0-9]{64}$/.test(observed.snapshot.indexDigest);
         if (!exactTerminal) {
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => { const next = structuredClone(state); next.status = 'OUTCOME_UNKNOWN'; next.cleanup = 'pending'; next.history.push({ kind: 'native_terminal_unknown', runId: state.writer.runId, at: now() }); return next; }, assertCurrent);
           return json({ ok: false, reason: 'NATIVE_TERMINAL_OUTCOME_UNKNOWN', task: safeRecord(record) });
         }
         record = await ledger.mutate(task.taskNodeId, record.revision, (state) => nativeRunObservation(state, { ticketId: state.ticket.activeId, event: { kind: 'provider_activity', runId: state.writer.runId }, now: now() }), assertCurrent);
         record = await ledger.mutate(task.taskNodeId, record.revision, (state) => nativeRunObservation(state, { ticketId: state.ticket.activeId, event: { kind: 'terminal', runId: state.writer.runId, status: 'ok' }, now: now() }), assertCurrent);
-        record = await ledger.mutate(task.taskNodeId, record.revision, (state) => settleObserved(state, { processStopped: observed.processStopped, sideEffects: observed.sideEffects, ticketId: state.ticket.activeId, writerId: state.writer.id, usage: observed.usage, snapshot: observed.snapshot, observation: observed }), assertCurrent);
+        record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
+          const settled = { processStopped: observed.processStopped, sideEffects: observed.sideEffects, ticketId: state.ticket.activeId, writerId: state.writer.id, usage: observed.usage, snapshot: observed.snapshot, observation: observed };
+          return cleanupDeferred ? settleFinalEvidence(state, settled) : settleObserved(state, settled);
+        }, assertCurrent);
         return json({ ok: true, observation: { status: observed.status, stopReason: observed.stopReason ?? null }, task: safeRecord(record) });
       }
 
@@ -512,10 +526,13 @@ export function createReadinessTool({
         exactArgs(params, ['action', 'taskNodeId', 'expectedRevision'], ['taskNodeId', 'expectedRevision']);
         requireThat(record.state.status === 'ACTIVE' && record.state.cleanup === 'pending' && record.state.workspace && !record.state.writer && !record.state.ticket, 'cleanup blocked by unresolved native run/resources');
         const observed = record.state.lastObservation;
-        record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
-          const decision = cleanupDecisionObserved(state, { taskNodeId: observed?.taskNodeId, root: task.root, processStopped: observed?.processStopped, groupStopped: observed?.groupStopped, containerRemoved: observed?.containerRemoved, lsofClear: observed?.lsofClear, sideEffects: observed?.sideEffects, durableResults: observed?.durableResults, cleanWorktree: observed?.cleanWorktree });
-          requireThat(decision.allowed, decision.reason); state.cleanup = decision.cleanup; return state;
-        }, assertCurrent);
+        const cleanupDeferred = observed?.cleanupDeferred === true;
+        if (!cleanupDeferred) {
+          record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
+            const decision = cleanupDecisionObserved(state, { taskNodeId: observed?.taskNodeId, root: task.root, processStopped: observed?.processStopped, groupStopped: observed?.groupStopped, containerRemoved: observed?.containerRemoved, lsofClear: observed?.lsofClear, sideEffects: observed?.sideEffects, durableResults: observed?.durableResults, cleanWorktree: observed?.cleanWorktree });
+            requireThat(decision.allowed, decision.reason); state.cleanup = decision.cleanup; return state;
+          }, assertCurrent);
+        }
         let cleanup;
         try {
           cleanup = await bridge.cleanupWorkspace(task, record.state.workspace);
@@ -525,7 +542,10 @@ export function createReadinessTool({
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => { state.status = 'OUTCOME_UNKNOWN'; state.cleanup = 'pending'; state.history.push({ kind: 'cleanup_outcome_unknown', at: now() }); return state; }, assertCurrent);
           return json({ ok: false, reason: 'CLEANUP_OUTCOME_UNKNOWN', task: safeRecord(record) });
         }
-        record = await ledger.mutate(task.taskNodeId, record.revision, (state) => finishTask(state, cleanup), assertCurrent);
+        record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
+          if (cleanupDeferred) state.cleanup = 'pass';
+          return finishTask(state, cleanup);
+        }, assertCurrent);
         return json({ ok: true, removed: true, task: safeRecord(record) });
       }
 

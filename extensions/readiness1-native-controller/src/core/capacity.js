@@ -235,19 +235,31 @@ export function resumeCapacity(s, { native, versions, now, snapshot, oldProcessS
   // A crash after this CAS leaves an outstanding reservation; it never replays.
   return validateState(next);
 }
-export function settle(s, e) {
-  requireThat(s.status === 'RUNNING' && e.processStopped === true && e.sideEffects === 'none', 'unconfirmed terminal result');
+function settleTerminal(s, e) {
+  requireThat(s.status === 'RUNNING' && e.sideEffects === 'none', 'unconfirmed terminal result');
   requireThat(s.ticket?.observation?.providerResponded === true && s.ticket.observation.terminalStatus === 'ok', 'unconfirmed provider terminal result');
   requireThat(e.ticketId === s.ticket.activeId && e.writerId === s.writer.id, 'terminal writer/ticket mismatch');
   validateSnapshot(e.snapshot, s.contract);
   integer(e.usage, 'usage'); requireThat(e.usage <= s.reserved, 'unconfirmed usage');
   const next = structuredClone(s); next.spent += e.usage; next.reserved = 0; next.writer = null; next.ticket = null; next.snapshot = structuredClone(e.snapshot); next.lastConfirmedHead = e.snapshot.head; next.status = 'ACTIVE'; next.cleanup = 'pending'; return next;
 }
+export function settle(s, e) {
+  requireThat(e.processStopped === true, 'unconfirmed terminal result');
+  return settleTerminal(s, e);
+}
 export function settleObserved(s, e) {
   requireThat(e.observation?.schema === 'readiness1.native-observation.v1' && e.observation.taskNodeId === s.contract.taskNodeId && e.observation.runId === s.writer?.runId && e.observation.sessionKey === s.writer?.sessionKey, 'terminal observation identity mismatch');
   requireThat(e.observation.processStopped === true && e.observation.groupStopped === true && e.observation.containerRemoved === true && e.observation.lsofClear === true && e.observation.cleanWorktree === true, 'terminal resources are not verified');
   requireThat(e.observation.usage === e.usage && equal(e.observation.snapshot, e.snapshot), 'terminal observation usage/snapshot mismatch');
   const next = settle(s, e);
+  next.lastObservation = structuredClone(e.observation);
+  return validateState(next);
+}
+export function settleFinalEvidence(s, e) {
+  requireThat(e.observation?.schema === 'readiness1.native-observation.v1' && e.observation.taskNodeId === s.contract.taskNodeId && e.observation.runId === s.writer?.runId && e.observation.sessionKey === s.writer?.sessionKey, 'terminal observation identity mismatch');
+  requireThat(e.observation.cleanupDeferred === true && e.observation.cleanWorktree === true && e.observation.durableResults === true, 'final evidence is incomplete');
+  requireThat(e.observation.usage === e.usage && equal(e.observation.snapshot, e.snapshot), 'terminal observation usage/snapshot mismatch');
+  const next = settleTerminal(s, e);
   next.lastObservation = structuredClone(e.observation);
   return validateState(next);
 }

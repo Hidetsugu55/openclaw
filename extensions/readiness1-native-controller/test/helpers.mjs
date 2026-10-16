@@ -4,6 +4,7 @@ import { createAcceptanceExecutor } from '../src/acceptance.js';
 import { createReadinessTool } from '../src/controller.js';
 import { createLedger } from '../src/ledger.js';
 import { createNativeBridge } from '../src/native-bridge.js';
+import { createSourceRunLifecycle } from '../src/source-run-lifecycle.js';
 
 export function memoryStore() {
   const values = new Map();
@@ -153,6 +154,7 @@ export function makeTool(overrides = {}) {
       calls.push(['worktree.remove', { taskNodeId, root }]);
       return { schema: 'readiness1.finish-receipt.v1', receiptId: 'finish-0001', taskNodeId, root, workspaceRemoved: true, releaseConfirmed: true, postRemovalLsofClear: true, auditConfirmed: true, observedAt: now() };
     },
+    sourceRunLifecycle: Object.hasOwn(overrides, 'sourceRunBinding') ? createSourceRunLifecycle({ sourceRunBinding: overrides.sourceRunBinding, now }) : undefined,
     ownerApprovalAvailable: async () => true,
     sendFixedOwnerDM: async () => ({ confirmed: true }),
     coordinateFixedTask: overrides.coordinateFixedTask ?? (async () => ({ confirmed: true })),
