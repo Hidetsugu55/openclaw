@@ -601,6 +601,9 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 },
                 runtimeExecutionObserver:
                   params.runtimeExecutionObserver && executionControl.publishExecutionObservation,
+                runtimeProcessCustody: params.requireDirectLocalProcessCustody
+                  ? { requireDirectLocalProcess: true }
+                  : undefined,
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   context: params.context,
                   runId: params.runId,

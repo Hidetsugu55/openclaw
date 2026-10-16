@@ -379,6 +379,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             onExecution: options?.onExecution,
             executionStartGuard: options?.executionStartGuard,
             runtimeExecutionObserver: options?.runtimeExecutionObserver,
+            requireDirectLocalProcessCustody: options?.requireDirectLocalProcessCustody,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,

@@ -28,6 +28,7 @@ import {
   createReadiness1SourceRunBindingV4,
   createReadiness1SourceRunBindingV5,
   createReadiness1SourceRunBindingV6,
+  createReadiness1SourceRunBindingV7,
   READINESS1_PLUGIN_ID,
   type Readiness1HostBinding,
   type Readiness1SourceRunBindingV2,
@@ -35,7 +36,9 @@ import {
   type Readiness1SourceRunBindingV4,
   type Readiness1SourceRunBindingV5,
   type Readiness1SourceRunBindingV6,
+  type Readiness1SourceRunBindingV7,
 } from "./readiness1-host-binding.js";
+import { finalizeReadiness1SourceRunCustody } from "./readiness1-source-run-custody.js";
 import {
   capturePluginLifecycleAuthority,
   getPluginRecordRegistry,
@@ -235,6 +238,26 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     let readiness1SourceRunBindingV4: Readiness1SourceRunBindingV4 | null | undefined;
     let readiness1SourceRunBindingV5: Readiness1SourceRunBindingV5 | null | undefined;
     let readiness1SourceRunBindingV6: Readiness1SourceRunBindingV6 | null | undefined;
+    let readiness1SourceRunBindingV7: Readiness1SourceRunBindingV7 | null | undefined;
+    const isExactWorkspaceAbsent = async (expected: Readonly<{ workspaceDir: string }>) => {
+      assertRuntimeCurrent();
+      try {
+        await fs.lstat(expected.workspaceDir);
+        assertRuntimeCurrent();
+        return false;
+      } catch (error) {
+        assertRuntimeCurrent();
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error as NodeJS.ErrnoException).code === "ENOENT"
+        ) {
+          return true;
+        }
+        throw error;
+      }
+    };
     const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
       if (readiness1HostBinding !== undefined) {
         return readiness1HostBinding ?? undefined;
@@ -502,6 +525,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             throw new Error("Readiness #1 source session security identity drift.");
           }
         },
+        isWorkspaceAbsent: isExactWorkspaceAbsent,
         openLedgerStore: () =>
           createPluginStateKeyedStore<unknown>(
             pluginId,
@@ -614,6 +638,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             throw new Error("Readiness #1 source session security identity drift.");
           }
         },
+        isWorkspaceAbsent: isExactWorkspaceAbsent,
         captureFinalSnapshot: async (expected) => {
           const gitOptions = {
             timeoutMs: 5_000,
@@ -831,6 +856,23 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       readiness1SourceRunBindingV6 = binding ?? null;
       return binding;
     };
+    const resolveReadiness1SourceRunBindingV7 = (): Readiness1SourceRunBindingV7 | undefined => {
+      if (readiness1SourceRunBindingV7 !== undefined) {
+        return readiness1SourceRunBindingV7 ?? undefined;
+      }
+      const binding = createReadiness1SourceRunBindingV7({
+        v6: resolveReadiness1SourceRunBindingV6(),
+        assertCurrent: assertRuntimeCurrent,
+        finalizeCleanup: async (expected) => {
+          assertRuntimeCurrent();
+          const receipt = await finalizeReadiness1SourceRunCustody(expected);
+          assertRuntimeCurrent();
+          return receipt;
+        },
+      });
+      readiness1SourceRunBindingV7 = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -879,6 +921,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "readiness1SourceRunBindingV6") {
           return resolveReadiness1SourceRunBindingV6();
+        }
+        if (prop === "readiness1SourceRunBindingV7") {
+          return resolveReadiness1SourceRunBindingV7();
         }
         if (prop === "state") {
           const baseState = getRuntimeProperty();

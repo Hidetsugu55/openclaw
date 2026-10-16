@@ -72,6 +72,8 @@ export type PluginSubagentExecutionControl = Readonly<{
   beforeProvider: (identity: AgentRuntimeExecutionIdentity) => Promise<void>;
   /** Optional bounded observer. Events and nested identity/observation values are frozen. */
   onObservation?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  /** Require a run-owned direct-local CLI process group before returning acceptance. */
+  requireDirectLocalProcessCustody?: true;
 }>;
 
 export type PluginSubagentExecutionResult = Readonly<{

@@ -452,6 +452,8 @@ export function runAgentAttempt(
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
       onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
+      runtimeProcessCustody: params.opts.runtimeProcessCustody,
+      runtimeExecutionObserver: params.opts.runtimeExecutionObserver,
       lane: params.opts.lane,
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,

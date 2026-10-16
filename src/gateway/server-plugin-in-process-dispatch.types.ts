@@ -41,6 +41,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   onExecutionStarted?: () => void;
   executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
   runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  requireDirectLocalProcessCustody?: boolean;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;

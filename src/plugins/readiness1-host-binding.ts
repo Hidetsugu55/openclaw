@@ -5,6 +5,7 @@ import type {
 } from "../agents/command/types.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
+import { registerReadiness1SourceRunCustody } from "./readiness1-source-run-custody.js";
 import {
   assessReadiness1SourceRunCleanupEvidence,
   assessReadiness1SourceRunFinalEvidence,
@@ -202,8 +203,9 @@ export type Readiness1SourceRunBindingV6 = Readonly<{
 
 /**
  * The host finalizer is the only place that may perform lossless cleanup. Its
- * receipt is intentionally run-bound and excludes paths, lease IDs, PIDs, and
- * provider payloads from the controller-facing surface.
+ * receipt is intentionally run-bound. It exposes only the fixed workspace
+ * identity; lease IDs, PIDs, provider payloads, and an operation handle never
+ * cross the controller-facing surface.
  */
 export type Readiness1SourceRunCleanupReceipt = Readonly<{
   runId: string;
@@ -797,10 +799,14 @@ export function createReadiness1SourceRunBindingV4(params: {
   bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
   /** Rechecks the persisted source session immediately before provider start. */
   assertSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+  /** Host-only exact-path readback after a lossless worktree removal. */
+  isWorkspaceAbsent?: (context: Readonly<{ workspaceDir: string }>) => Promise<boolean>;
 }): Readiness1SourceRunBindingV4 | undefined {
   const v3 = createReadiness1SourceRunBindingV3(params);
   const assertSourceSession = params.assertSourceSession;
   const waitForRun = params.waitForRun;
+  const workspaceRuntime = params.workspace;
+  const isWorkspaceAbsent = params.isWorkspaceAbsent;
   if (!v3 || !assertSourceSession || !waitForRun) {
     return undefined;
   }
@@ -824,6 +830,7 @@ export function createReadiness1SourceRunBindingV4(params: {
       params.assertCurrent();
       const lease = await v3.prepare({ taskNodeId: request.taskNodeId, claimId: request.ticketId });
       let providerAdmissionPassed = false;
+      let custodyRegistered = false;
       try {
         const accepted = await lease.withContext(async (context) => {
           if (
@@ -875,15 +882,89 @@ export function createReadiness1SourceRunBindingV4(params: {
                 providerAdmissionPassed = true;
                 params.assertCurrent();
               },
-              ...(request.onObservation
-                ? {
-                    onObservation: async (event) => {
-                      params.assertCurrent();
-                      requireExpectedIdentity(event.identity, context.sessionKey);
-                      await request.onObservation?.(event);
-                    },
+              requireDirectLocalProcessCustody: true,
+              onObservation: async (event) => {
+                params.assertCurrent();
+                requireExpectedIdentity(event.identity, context.sessionKey);
+                if (event.observation.kind === "direct_local_process_custody") {
+                  if (custodyRegistered || !workspaceRuntime || !isWorkspaceAbsent) {
+                    throw new Error("Readiness #1 source process custody is unavailable.");
                   }
-                : {}),
+                  const expected = Object.freeze({
+                    runId: event.identity.runId,
+                    sessionKey: event.identity.sessionKey,
+                    workspaceDir: context.workspaceDir,
+                  });
+                  registerReadiness1SourceRunCustody({
+                    expected,
+                    custody: event.observation.custody,
+                    finalizeWorkspace: async (physical) => {
+                      const processConfirmed =
+                        physical.processStopped &&
+                        physical.groupStopped &&
+                        physical.containerAbsent &&
+                        physical.lsofClear;
+                      if (!processConfirmed) {
+                        return Object.freeze({
+                          processStopped: physical.processStopped,
+                          groupStopped: physical.groupStopped,
+                          containerRemoved: physical.containerAbsent,
+                          lsofClear: physical.lsofClear,
+                          runLeaseReleased: false,
+                          workspaceReleased: false,
+                          workspaceRemoved: false,
+                        });
+                      }
+                      let runLeaseReleased = false;
+                      try {
+                        // V2 converts its underlying boolean receipt into a
+                        // rejection on false, so a fulfilled release here is
+                        // the exact retained lease receipt.
+                        await lease.release();
+                        runLeaseReleased = true;
+                      } catch {
+                        // The receipt remains UNKNOWN; never infer a release.
+                      }
+                      if (!runLeaseReleased) {
+                        return Object.freeze({
+                          processStopped: true,
+                          groupStopped: true,
+                          containerRemoved: true,
+                          lsofClear: true,
+                          runLeaseReleased: false,
+                          workspaceReleased: false,
+                          workspaceRemoved: false,
+                        });
+                      }
+                      let removed = false;
+                      let absent = false;
+                      try {
+                        removed = await workspaceRuntime.worktrees.removeIfLossless({
+                          path: context.workspaceDir,
+                          ownerKind: "workboard",
+                          ownerId: `readiness1:${initial.task.taskNodeId}:${request.ticketId}`,
+                        });
+                        absent =
+                          removed &&
+                          (await isWorkspaceAbsent({ workspaceDir: context.workspaceDir }));
+                      } catch {
+                        // Lossless removal/readback must be explicit before confirmation.
+                      }
+                      return Object.freeze({
+                        processStopped: true,
+                        groupStopped: true,
+                        containerRemoved: true,
+                        lsofClear: true,
+                        runLeaseReleased: true,
+                        workspaceReleased: absent,
+                        workspaceRemoved: removed && absent,
+                      });
+                    },
+                  });
+                  custodyRegistered = true;
+                }
+                await request.onObservation?.(event);
+              },
             },
           );
           requireExpectedIdentity(result.execution, context.sessionKey);
@@ -945,6 +1026,7 @@ export function createReadiness1SourceRunBindingV5(params: {
   acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
   bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
   assertSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+  isWorkspaceAbsent?: (context: Readonly<{ workspaceDir: string }>) => Promise<boolean>;
   /** Host closure that reads one exact managed-worktree final state. */
   captureFinalSnapshot?: Readiness1SourceRunSnapshotReader;
 }): Readiness1SourceRunBindingV5 | undefined {

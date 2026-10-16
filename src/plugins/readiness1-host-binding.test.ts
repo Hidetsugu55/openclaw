@@ -24,6 +24,7 @@ import {
   type Readiness1SourceRunBindingV5,
   type Readiness1SourceRunBindingV6,
 } from "./readiness1-host-binding.js";
+import { finalizeReadiness1SourceRunCustody } from "./readiness1-source-run-custody.js";
 import type { Readiness1SourceRunFinalEvidence } from "./readiness1-source-run-evidence.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -585,6 +586,175 @@ describe("createReadiness1HostBinding", () => {
     await expect(launched.awaitTerminal()).resolves.toEqual({ status: "timeout" });
     expect(releaseRunLease).not.toHaveBeenCalled();
     expect(releaseWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("finalizes one admitted direct-local custody receipt before releasing its exact workspace", async () => {
+    const taskNodeId = "TASK_source_v4_custody_123";
+    const ticketId = "ticket-source-v4-custody-123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v4-custody",
+      },
+      instructions: "Edit only the canonical source worktree and run the fixed tests.",
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v4-custody-123",
+      worktreeBranch: "openclaw/readiness1-task-source-v4-custody-123",
+    };
+    const cleanupAndObserve = vi.fn(async () => ({
+      processStopped: true,
+      groupStopped: true,
+      containerAbsent: true as const,
+      lsofClear: true,
+    }));
+    const releaseRunLease = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const removeIfLossless = vi.fn(async () => true);
+    const isWorkspaceAbsent = vi.fn(async () => true);
+    const runWithExecutionControl = vi.fn(
+      async (
+        params: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[0],
+        control: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[1],
+      ) => {
+        const identity = Object.freeze({
+          runId: "native-source-v4-custody",
+          sessionKey: params.sessionKey,
+          sessionId: "native-source-session",
+          lifecycleGeneration: "generation-1",
+          resourceOwnership: Object.freeze({
+            run: "gateway" as const,
+            session: "gateway" as const,
+            cleanup: "gateway" as const,
+          }),
+        });
+        await control.beforeProvider(identity);
+        await control.onObservation?.({
+          identity,
+          sequence: 1,
+          observation: Object.freeze({
+            kind: "direct_local_process_custody" as const,
+            custody: Object.freeze({
+              kind: "direct-local-process-group" as const,
+              cleanupAndObserve,
+            }),
+          }),
+        });
+        return Object.freeze({
+          runId: identity.runId,
+          sessionKey: identity.sessionKey,
+          execution: identity,
+        });
+      },
+    );
+    const binding = createReadiness1SourceRunBindingV4({
+      acquireSourceRunLease: vi.fn(async () => ({ release: releaseRunLease })),
+      bindSourceSession: vi.fn(async () => {}),
+      assertSourceSession: vi.fn(async () => {}),
+      isWorkspaceAbsent,
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl,
+      waitForRun: vi.fn(async () => ({ status: "timeout" as const })),
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v4-custody",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: vi.fn(async () => {}),
+          removeIfLossless,
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run v4 binding was not created");
+
+    const launched = await binding.launch({
+      taskNodeId,
+      ticketId,
+      beforeProvider: vi.fn(async () => {}),
+    });
+    const receipt = await finalizeReadiness1SourceRunCustody({
+      runId: launched.runId,
+      sessionKey: launched.sessionKey,
+      workspaceDir: launched.workspaceDir,
+    });
+
+    expect(receipt).toEqual({
+      runId: "native-source-v4-custody",
+      sessionKey: launched.sessionKey,
+      workspaceDir: descriptor.contract.root,
+      processStopped: true,
+      groupStopped: true,
+      containerRemoved: true,
+      lsofClear: true,
+      runLeaseReleased: true,
+      workspaceReleased: true,
+      workspaceRemoved: true,
+    });
+    expect(runWithExecutionControl.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ requireDirectLocalProcessCustody: true }),
+    );
+    expect(cleanupAndObserve).toHaveBeenCalledTimes(1);
+    expect(releaseRunLease).toHaveBeenCalledTimes(1);
+    expect(removeIfLossless).toHaveBeenCalledWith({
+      path: descriptor.contract.root,
+      ownerKind: "workboard",
+      ownerId: `readiness1:${taskNodeId}:${ticketId}`,
+    });
+    expect(isWorkspaceAbsent).toHaveBeenCalledWith({ workspaceDir: descriptor.contract.root });
+    expect(cleanupAndObserve.mock.invocationCallOrder[0]).toBeLessThan(
+      releaseRunLease.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(releaseRunLease.mock.invocationCallOrder[0]).toBeLessThan(
+      removeIfLossless.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    await expect(
+      finalizeReadiness1SourceRunCustody({
+        runId: launched.runId,
+        sessionKey: launched.sessionKey,
+        workspaceDir: launched.workspaceDir,
+      }),
+    ).rejects.toThrow("source run custody is unavailable");
+
+    const retained = await binding.launch({
+      taskNodeId,
+      ticketId: `${ticketId}-lease-false`,
+      beforeProvider: vi.fn(async () => {}),
+    });
+    await expect(
+      finalizeReadiness1SourceRunCustody({
+        runId: retained.runId,
+        sessionKey: retained.sessionKey,
+        workspaceDir: retained.workspaceDir,
+      }),
+    ).resolves.toMatchObject({
+      processStopped: true,
+      groupStopped: true,
+      containerRemoved: true,
+      lsofClear: true,
+      runLeaseReleased: false,
+      workspaceReleased: false,
+      workspaceRemoved: false,
+    });
+    expect(removeIfLossless).toHaveBeenCalledTimes(1);
   });
 
   it("reads a fixed final snapshot only after one exact terminal receipt", async () => {
@@ -1249,7 +1419,9 @@ describe("createReadiness1HostBinding", () => {
         | "readiness1SourceRunBindingV2"
         | "readiness1SourceRunBindingV3"
         | "readiness1SourceRunBindingV4"
-        | "readiness1SourceRunBindingV5" = "readiness1HostBinding",
+        | "readiness1SourceRunBindingV5"
+        | "readiness1SourceRunBindingV6"
+        | "readiness1SourceRunBindingV7" = "readiness1HostBinding",
     ) => {
       const builder = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
@@ -1284,12 +1456,20 @@ describe("createReadiness1HostBinding", () => {
     expect(
       resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV5"),
     ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND });
+    expect(
+      resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV6"),
+    ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND });
+    expect(
+      resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV7"),
+    ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V7_KIND });
     expect(resolveBinding("readiness1-native-controller", "global")).toBeUndefined();
     expect(resolveBinding("other", "bundled")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV2")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV3")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV4")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV5")).toBeUndefined();
+    expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV6")).toBeUndefined();
+    expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV7")).toBeUndefined();
   });
 
   it("refuses source-session sandbox creation from every other plugin", async () => {

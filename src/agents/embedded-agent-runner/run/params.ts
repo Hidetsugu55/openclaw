@@ -29,6 +29,10 @@ import type {
   AgentStreamParams,
   ClientToolDefinition,
 } from "../../command/shared-types.js";
+import type {
+  AgentRuntimeExecutionObservation,
+  AgentRuntimeProcessCustodyRequest,
+} from "../../command/types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
@@ -218,6 +222,10 @@ export type RunEmbeddedAgentParams = {
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
+  /** Trusted in-process observer for bounded native execution facts. */
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionObservation) => unknown;
+  /** Host-only requirement for a direct local CLI process custody event. */
+  runtimeProcessCustody?: AgentRuntimeProcessCustodyRequest;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;

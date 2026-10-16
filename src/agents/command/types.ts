@@ -76,6 +76,8 @@ export type AgentRuntimeExecutionObservation = Readonly<
   | { kind: "provider_activity"; toolCallStarted: boolean; outputTokens?: number }
   | { kind: "provider_error"; capacityExhausted: boolean }
   | { kind: "terminal"; status: "ok" | "error" }
+  /** Opaque custody emitted exactly after direct local CLI process admission. */
+  | { kind: "direct_local_process_custody"; custody: AgentRuntimeDirectLocalProcessCustody }
   /**
    * Terminal result facts produced only after the command has finished its
    * durable result/delivery handling. The payload never contains model text,
@@ -93,6 +95,33 @@ export type AgentRuntimeExecutionEvent = Readonly<{
   identity: AgentRuntimeExecutionIdentity;
   sequence: number;
   observation: AgentRuntimeExecutionObservation;
+}>;
+
+/**
+ * Opaque custody for one direct, host-local CLI process group. It deliberately
+ * exposes only cleanup facts: callers cannot inspect a PID, host path, command,
+ * provider payload, or listener details.
+ */
+export type AgentRuntimeDirectLocalProcessCustody = Readonly<{
+  kind: "direct-local-process-group";
+  cleanupAndObserve: () => Promise<
+    Readonly<{
+      processStopped: boolean;
+      groupStopped: boolean;
+      /** This exact execution path allocated no run-owned container. */
+      containerAbsent: true;
+      lsofClear: boolean;
+    }>
+  >;
+}>;
+
+/**
+ * Host-only process-custody request. It is not accepted from RPC input and
+ * carries no caller-supplied process identity.
+ */
+export type AgentRuntimeProcessCustodyRequest = Readonly<{
+  /** Reject node/plugin execution before provider work; only direct local CLI is admissible. */
+  requireDirectLocalProcess: true;
 }>;
 
 /** Full trusted option surface for running an agent command. */
@@ -203,6 +232,8 @@ export type AgentCommandOpts = {
   onExecutionStarted?: () => unknown;
   /** Trusted in-process observer; receives bounded lifecycle facts and never model text. */
   runtimeExecutionObserver?: (event: AgentRuntimeExecutionObservation) => unknown;
+  /** Trusted in-process request for one opaque direct-local process custody. */
+  runtimeProcessCustody?: AgentRuntimeProcessCustodyRequest;
   extraSystemPrompt?: string;
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -325,6 +356,7 @@ type AgentCommandGatewayOnlyKey =
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
   | "runtimeExecutionObserver"
+  | "runtimeProcessCustody"
   | "beforeTerminalDelivery"
   | "prepareAssistantTranscriptMessage"
   | "internalDeliverySuppressErrors";

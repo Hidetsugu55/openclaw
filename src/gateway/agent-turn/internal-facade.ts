@@ -257,6 +257,7 @@ export function createInternalAgentTurnFacade(
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
                 executionStartGuard: dispatchOptions.executionStartGuard,
                 runtimeExecutionObserver: dispatchOptions.runtimeExecutionObserver,
+                requireDirectLocalProcessCustody: dispatchOptions.requireDirectLocalProcessCustody,
                 onExecution: (execution) => {
                   runExecution = execution;
                 },

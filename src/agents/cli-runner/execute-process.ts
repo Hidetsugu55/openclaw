@@ -16,6 +16,7 @@ import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
+import { createDirectLocalProcessCustody } from "./direct-process-custody.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -90,6 +91,13 @@ export async function executeCliProcess(params: {
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
+  const processCustody = runParams.runtimeProcessCustody;
+  // Source-run cleanup may only certify the direct host process path. Reject
+  // remote-node and plugin-owned execution before a provider is started rather
+  // than treating their resources as equivalent local process custody.
+  if (processCustody && (params.nodePlacement || context.executionTarget.kind !== "process")) {
+    throw new Error("Direct local process custody is unavailable for this CLI execution target.");
+  }
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -326,6 +334,24 @@ export async function executeCliProcess(params: {
           onStderr: consumeStderr,
         });
         managedRunPid = managedRun.pid;
+        if (processCustody) {
+          try {
+            if (!runParams.runtimeExecutionObserver) {
+              throw new Error("Direct local process custody observer is unavailable.");
+            }
+            await runParams.runtimeExecutionObserver({
+              kind: "direct_local_process_custody",
+              custody: createDirectLocalProcessCustody(managedRun),
+            });
+          } catch (error) {
+            // Custody admission failed after a native child exists. Stop only
+            // this supervisor-owned run; a higher layer keeps the worktree
+            // retained because physical ownership is now uncertain.
+            managedRun.cancel("manual-cancel");
+            await managedRun.wait().catch(() => undefined);
+            throw error;
+          }
+        }
         const detachReplyBackend = attachCliReplyBackend(runParams, () => {
           processCancelled = true;
           managedRun.cancel("manual-cancel");

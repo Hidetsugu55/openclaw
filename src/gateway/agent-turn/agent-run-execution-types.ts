@@ -59,6 +59,7 @@ export type StartAgentRunExecutionParams = {
   io: AgentTurnIo;
   executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
   runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  requireDirectLocalProcessCustody?: boolean;
   releaseCronContinuationClaimWithRecovery: (
     outcome?: { terminalOutcome: AgentRunTerminalOutcome },
     onRecovered?: () => void,

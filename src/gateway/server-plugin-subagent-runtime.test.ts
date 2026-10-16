@@ -211,6 +211,64 @@ describe("plugin subagent execution control", () => {
     expect(Object.isFrozen(result.runtime)).toBe(true);
   });
 
+  it("waits for one opaque direct-local custody observation when the host requires it", async () => {
+    const identity = Object.freeze({
+      runId: "native-custody-run",
+      sessionKey: "agent:research:custody",
+      sessionId: "native-custody-session",
+      lifecycleGeneration: "native-custody-generation",
+      resourceOwnership: Object.freeze({
+        run: "gateway" as const,
+        session: "gateway" as const,
+        cleanup: "gateway" as const,
+      }),
+    });
+    const custody = Object.freeze({
+      kind: "direct-local-process-group" as const,
+      cleanupAndObserve: vi.fn(async () => ({
+        processStopped: true,
+        groupStopped: true,
+        containerAbsent: true as const,
+        lsofClear: true,
+      })),
+    });
+    const event = Object.freeze({
+      identity,
+      sequence: 1,
+      observation: Object.freeze({ kind: "direct_local_process_custody" as const, custody }),
+    });
+    const dispatch = vi
+      .spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess")
+      .mockImplementation(async (_method, _params, options) => {
+        const execution = (async () => {
+          await options?.executionStartGuard?.(identity);
+          options?.onExecutionStarted?.();
+          await options?.runtimeExecutionObserver?.(event);
+        })();
+        options?.onExecution?.(execution);
+        return { runId: identity.runId, sessionKey: identity.sessionKey } as never;
+      });
+    const onObservation = vi.fn(async () => {});
+
+    await expect(
+      createRuntime().runWithExecutionControl(
+        { sessionKey: identity.sessionKey, message: "controlled custody work" },
+        {
+          beforeProvider: async () => {},
+          onObservation,
+          requireDirectLocalProcessCustody: true,
+        },
+      ),
+    ).resolves.toMatchObject({ runId: identity.runId, execution: identity });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "agent",
+      expect.anything(),
+      expect.objectContaining({ requireDirectLocalProcessCustody: true }),
+    );
+    expect(onObservation).toHaveBeenCalledExactlyOnceWith(event);
+  });
+
   it("rejects accepted identity drift", async () => {
     const identity = Object.freeze({
       runId: "native-run",

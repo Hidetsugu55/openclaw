@@ -52,6 +52,7 @@ type AgentTurnStartRequest = {
   onRunObserved?: (runId: string) => void;
   executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
   runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  requireDirectLocalProcessCustody?: boolean;
   onExecution?: (execution: Promise<void>) => void;
 };
 
@@ -71,6 +72,7 @@ export function createAgentTurnService(
     onRunObserved,
     executionStartGuard,
     runtimeExecutionObserver,
+    requireDirectLocalProcessCustody,
     onExecution,
   }: AgentTurnStartRequest): Promise<void> => {
     const promptedAt = Date.now();
@@ -624,6 +626,7 @@ export function createAgentTurnService(
           io,
           executionStartGuard,
           runtimeExecutionObserver,
+          requireDirectLocalProcessCustody,
           releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
         }),
       );

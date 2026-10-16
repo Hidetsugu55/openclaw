@@ -43,6 +43,7 @@ export type InternalAgentTurnDispatchOptions = {
   /** In-process only; awaited with host-native identity before provider execution. */
   executionStartGuard?: (identity: AgentRuntimeExecutionIdentity) => void | Promise<void>;
   runtimeExecutionObserver?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+  requireDirectLocalProcessCustody?: boolean;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;

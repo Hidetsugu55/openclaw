@@ -4,7 +4,10 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
-import type { AgentRuntimeExecutionIdentity } from "../agents/command/types.js";
+import type {
+  AgentRuntimeExecutionEvent,
+  AgentRuntimeExecutionIdentity,
+} from "../agents/command/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
@@ -210,6 +213,9 @@ export function createGatewaySubagentRuntime(
     const params = { ...request };
     const assertCurrent = params.assertCurrent;
     assertCurrent?.();
+    if (executionControl?.requireDirectLocalProcessCustody && !executionControl.onObservation) {
+      throw new Error("Direct local process custody requires an execution observer.");
+    }
     if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
       throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
     }
@@ -280,6 +286,9 @@ export function createGatewaySubagentRuntime(
     let admittedIdentity: AgentRuntimeExecutionIdentity | undefined;
     let resolveAdmission: ((identity: AgentRuntimeExecutionIdentity) => void) | undefined;
     let rejectAdmission: ((error: unknown) => void) | undefined;
+    let custodyObserved = false;
+    let resolveCustody: (() => void) | undefined;
+    let rejectCustody: ((error: unknown) => void) | undefined;
     const admission = executionControl
       ? new Promise<AgentRuntimeExecutionIdentity>((resolve, reject) => {
           resolveAdmission = resolve;
@@ -290,6 +299,41 @@ export function createGatewaySubagentRuntime(
       (identity) => ({ status: "admitted" as const, identity }),
       (error: unknown) => ({ status: "failed" as const, error }),
     );
+    const custody = executionControl?.requireDirectLocalProcessCustody
+      ? new Promise<void>((resolve, reject) => {
+          resolveCustody = resolve;
+          rejectCustody = reject;
+        })
+      : undefined;
+    const custodyOutcome = custody?.then(
+      () => ({ status: "admitted" as const }),
+      (error: unknown) => ({ status: "failed" as const, error }),
+    );
+    const observeExecution = async (event: AgentRuntimeExecutionEvent) => {
+      if (executionControl?.requireDirectLocalProcessCustody) {
+        if (event.observation.kind === "direct_local_process_custody") {
+          if (custodyObserved) {
+            const error = new Error("Direct local process custody was published more than once.");
+            rejectCustody?.(error);
+            throw error;
+          }
+          if (
+            !admittedIdentity ||
+            event.identity.runId !== admittedIdentity.runId ||
+            event.identity.sessionKey !== admittedIdentity.sessionKey
+          ) {
+            const error = new Error("Direct local process custody identity is UNKNOWN.");
+            rejectCustody?.(error);
+            throw error;
+          }
+          custodyObserved = true;
+          await executionControl.onObservation?.(event);
+          resolveCustody?.();
+          return;
+        }
+      }
+      await executionControl?.onObservation?.(event);
+    };
     const payload = await dispatchGatewayMethodInProcess<{
       runId?: string;
       sessionKey?: string;
@@ -324,7 +368,9 @@ export function createGatewaySubagentRuntime(
                   throw error;
                 }
               },
-              runtimeExecutionObserver: executionControl.onObservation,
+              runtimeExecutionObserver: observeExecution,
+              requireDirectLocalProcessCustody:
+                executionControl.requireDirectLocalProcessCustody === true,
               onExecutionStarted: () => {
                 notifyAgentRunExecutionCanary({
                   kind: "provider-start-hook",
@@ -380,6 +426,17 @@ export function createGatewaySubagentRuntime(
       throw new Error(
         "Plugin subagent accepted identity drifted from native execution identity; ownership is UNKNOWN.",
       );
+    }
+    if (custodyOutcome) {
+      const custodyResult = await Promise.race([custodyOutcome, executionOutcome]);
+      if (custodyResult.status === "failed") {
+        throw custodyResult.error;
+      }
+      if (custodyResult.status === "ended") {
+        throw new Error(
+          "Plugin subagent execution ended before direct local process custody; ownership is UNKNOWN.",
+        );
+      }
     }
     return Object.freeze({
       runId,
