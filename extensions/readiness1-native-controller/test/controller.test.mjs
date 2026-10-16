@@ -409,6 +409,27 @@ test('restart reconciliation reports an ambiguous run once without a duplicate w
   assert.equal(reports.length, 1);
 });
 
+test('restart reconciliation resumes a persisted exact run without a duplicate writer', async () => {
+  const first = makeTool();
+  let task = await activate(first.tool);
+  task = (await first.tool.execute('dispatch-before-restart', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'RUNNING');
+  assert.equal(first.calls.filter(([name]) => name === 'provider.work').length, 1);
+
+  const restarted = makeTool({ store: first.store });
+  const reconciled = (await restarted.tool.execute('reconcile-after-restart', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.continuation.completedStep, 'observe');
+  assert.equal(reconciled.continuation.plannedNext, 'cleanup');
+  assert.equal(reconciled.task.status, 'ACTIVE');
+  assert.equal(reconciled.task.cleanup, 'pending');
+  assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+});
+
 test('capacity wait reports the safe checkpoint rather than silently idling', async () => {
   const reports = [];
   const { tool, calls } = makeTool({
