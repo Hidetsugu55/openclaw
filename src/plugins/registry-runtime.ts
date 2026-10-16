@@ -27,12 +27,14 @@ import {
   createReadiness1SourceRunBindingV3,
   createReadiness1SourceRunBindingV4,
   createReadiness1SourceRunBindingV5,
+  createReadiness1SourceRunBindingV6,
   READINESS1_PLUGIN_ID,
   type Readiness1HostBinding,
   type Readiness1SourceRunBindingV2,
   type Readiness1SourceRunBindingV3,
   type Readiness1SourceRunBindingV4,
   type Readiness1SourceRunBindingV5,
+  type Readiness1SourceRunBindingV6,
 } from "./readiness1-host-binding.js";
 import {
   capturePluginLifecycleAuthority,
@@ -232,6 +234,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     let readiness1SourceRunBindingV3: Readiness1SourceRunBindingV3 | null | undefined;
     let readiness1SourceRunBindingV4: Readiness1SourceRunBindingV4 | null | undefined;
     let readiness1SourceRunBindingV5: Readiness1SourceRunBindingV5 | null | undefined;
+    let readiness1SourceRunBindingV6: Readiness1SourceRunBindingV6 | null | undefined;
     const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
       if (readiness1HostBinding !== undefined) {
         return readiness1HostBinding ?? undefined;
@@ -695,6 +698,139 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       readiness1SourceRunBindingV5 = binding ?? null;
       return binding;
     };
+    const resolveReadiness1SourceRunBindingV6 = (): Readiness1SourceRunBindingV6 | undefined => {
+      if (readiness1SourceRunBindingV6 !== undefined) {
+        return readiness1SourceRunBindingV6 ?? undefined;
+      }
+      const v5 = resolveReadiness1SourceRunBindingV5();
+      const openFinalObservationStore = () =>
+        createPluginStateKeyedStore<unknown>(
+          pluginId,
+          {
+            namespace: "readiness1-source-run-final-observations",
+            retention: "retained",
+          },
+          assertRuntimeCurrent,
+        );
+      const sameStoredFinalObservation = (
+        value: unknown,
+        expected: Readonly<{ runId: string; sessionKey: string }>,
+      ) => {
+        const stored = value as
+          | {
+              runId?: unknown;
+              sessionKey?: unknown;
+              usage?: unknown;
+              result?: {
+                runId?: unknown;
+                sessionKey?: unknown;
+                digest?: unknown;
+                byteLength?: unknown;
+              };
+            }
+          | undefined;
+        return (
+          stored?.runId === expected.runId &&
+          stored.sessionKey === expected.sessionKey &&
+          typeof stored.usage === "number" &&
+          Number.isSafeInteger(stored.usage) &&
+          stored.usage >= 0 &&
+          stored.result?.runId === expected.runId &&
+          stored.result.sessionKey === expected.sessionKey &&
+          typeof stored.result.digest === "string" &&
+          /^[a-f0-9]{64}$/.test(stored.result.digest) &&
+          typeof stored.result.byteLength === "number" &&
+          Number.isSafeInteger(stored.result.byteLength) &&
+          stored.result.byteLength >= 0
+        );
+      };
+      const binding = createReadiness1SourceRunBindingV6({
+        v5,
+        assertCurrent: assertRuntimeCurrent,
+        waitForRun: (params) => runtime.subagent.waitForRun(params),
+        persistFinalObservation: async (event) => {
+          assertRuntimeCurrent();
+          if (event.observation.kind !== "final") {
+            return;
+          }
+          const expected = Object.freeze({
+            runId: event.identity.runId,
+            sessionKey: event.identity.sessionKey,
+          });
+          const next = Object.freeze({
+            runId: expected.runId,
+            sessionKey: expected.sessionKey,
+            usage: event.observation.usage,
+            result: Object.freeze({
+              runId: expected.runId,
+              sessionKey: expected.sessionKey,
+              digest: event.observation.result.digest,
+              byteLength: event.observation.result.byteLength,
+            }),
+          });
+          if (!sameStoredFinalObservation(next, expected)) {
+            throw new Error("Readiness #1 source final observation is invalid.");
+          }
+          const key = `run:${expected.runId}`;
+          const store = openFinalObservationStore();
+          const existing = await store.lookup(key);
+          assertRuntimeCurrent();
+          if (existing !== undefined) {
+            if (!sameStoredFinalObservation(existing, expected)) {
+              throw new Error("Readiness #1 source final observation identity drift.");
+            }
+            const current = existing as typeof next;
+            if (
+              current.usage !== next.usage ||
+              current.result?.digest !== next.result.digest ||
+              current.result?.byteLength !== next.result.byteLength
+            ) {
+              throw new Error("Readiness #1 source final observation conflict.");
+            }
+            return;
+          }
+          if (await store.registerIfAbsent(key, next)) {
+            assertRuntimeCurrent();
+            return;
+          }
+          const current = await store.lookup(key);
+          assertRuntimeCurrent();
+          if (
+            !sameStoredFinalObservation(current, expected) ||
+            (current as typeof next).usage !== next.usage ||
+            (current as typeof next).result?.digest !== next.result.digest ||
+            (current as typeof next).result?.byteLength !== next.result.byteLength
+          ) {
+            throw new Error("Readiness #1 source final observation conflict.");
+          }
+        },
+        readFinalObservation: async (expected) => {
+          assertRuntimeCurrent();
+          const stored = await openFinalObservationStore().lookup(`run:${expected.runId}`);
+          assertRuntimeCurrent();
+          if (!sameStoredFinalObservation(stored, expected)) {
+            return undefined;
+          }
+          const current = stored as {
+            usage: number;
+            result: { digest: string; byteLength: number };
+          };
+          return Object.freeze({
+            runId: expected.runId,
+            sessionKey: expected.sessionKey,
+            usage: current.usage,
+            result: Object.freeze({
+              runId: expected.runId,
+              sessionKey: expected.sessionKey,
+              digest: current.result.digest,
+              byteLength: current.result.byteLength,
+            }),
+          });
+        },
+      });
+      readiness1SourceRunBindingV6 = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -740,6 +876,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "readiness1SourceRunBindingV5") {
           return resolveReadiness1SourceRunBindingV5();
+        }
+        if (prop === "readiness1SourceRunBindingV6") {
+          return resolveReadiness1SourceRunBindingV6();
         }
         if (prop === "state") {
           const baseState = getRuntimeProperty();

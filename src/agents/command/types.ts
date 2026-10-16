@@ -76,6 +76,16 @@ export type AgentRuntimeExecutionObservation = Readonly<
   | { kind: "provider_activity"; toolCallStarted: boolean; outputTokens?: number }
   | { kind: "provider_error"; capacityExhausted: boolean }
   | { kind: "terminal"; status: "ok" | "error" }
+  /**
+   * Terminal result facts produced only after the command has finished its
+   * durable result/delivery handling. The payload never contains model text,
+   * tool input, or provider payloads.
+   */
+  | {
+      kind: "final";
+      result: Readonly<{ digest: string; byteLength: number }>;
+      usage: number;
+    }
 >;
 
 /** Immutable, ordered observation delivered only through the trusted in-process runtime. */

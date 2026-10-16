@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentRuntimeExecutionEvent } from "../agents/command/types.js";
 import {
   closePluginStateDatabaseAsync,
   resetPluginStateStoreForTests,
@@ -11,11 +12,14 @@ import {
   createReadiness1SourceRunBindingV3,
   createReadiness1SourceRunBindingV4,
   createReadiness1SourceRunBindingV5,
+  createReadiness1SourceRunBindingV6,
   READINESS1_HOST_BINDING_KIND,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
   READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+  type Readiness1SourceRunBindingV5,
 } from "./readiness1-host-binding.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -723,6 +727,125 @@ describe("createReadiness1HostBinding", () => {
     expect(captureFinalSnapshot).toHaveBeenCalledTimes(2);
     expect(releaseRunLease).not.toHaveBeenCalled();
     expect(releaseWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("binds one durable final result and measured usage to the exact held run", async () => {
+    const identity = Object.freeze({
+      runId: "native-source-v6",
+      sessionKey: "agent:dev-host:subagent:workboard-readiness1-v6",
+      sessionId: "native-source-session-v6",
+      lifecycleGeneration: "generation-v6",
+      resourceOwnership: Object.freeze({
+        run: "gateway" as const,
+        session: "gateway" as const,
+        cleanup: "gateway" as const,
+      }),
+    });
+    const terminalReceipt = {
+      runId: identity.runId,
+      sessionId: identity.sessionId,
+      turnId: "native-turn-v6",
+      requested: { provider: "codex", model: "gpt-5" },
+      effective: { provider: "codex", model: "gpt-5", responseModel: "gpt-5" },
+      successfulToolNames: [],
+      rerouted: false,
+      terminalDisposition: "silent" as const,
+    };
+    const finalEvent = Object.freeze({
+      identity,
+      sequence: 4,
+      observation: Object.freeze({
+        kind: "final" as const,
+        result: Object.freeze({ digest: "f".repeat(64), byteLength: 128 }),
+        usage: 42,
+      }),
+    });
+    const persisted = new Map<
+      string,
+      Extract<AgentRuntimeExecutionEvent["observation"], { kind: "final" }>
+    >();
+    const persistFinalObservation = vi.fn(async (event: AgentRuntimeExecutionEvent) => {
+      if (event.observation.kind === "final") {
+        persisted.set(event.identity.runId, event.observation);
+      }
+    });
+    const callerObservation = vi.fn(async () => {});
+    const v5: Readiness1SourceRunBindingV5 = Object.freeze({
+      kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+      launch: async (request) => {
+        await request.onObservation?.(finalEvent);
+        return Object.freeze({
+          kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+          runId: identity.runId,
+          sessionKey: identity.sessionKey,
+          workspaceDir: "/state/worktrees/wt-v6",
+          readFinalSnapshot: async () =>
+            Object.freeze({
+              workspaceDir: "/state/worktrees/wt-v6",
+              head: "a".repeat(40),
+              indexDigest: "b".repeat(64),
+              dirty: "",
+            }),
+        });
+      },
+    });
+    const binding = createReadiness1SourceRunBindingV6({
+      v5,
+      assertCurrent: vi.fn(),
+      waitForRun: vi.fn(async () =>
+        Object.freeze({
+          status: "ok" as const,
+          providerStarted: true,
+          endedAt: 1_700_000_000_000,
+          terminalReceipt,
+          terminalReply: { disposition: "silent" as const },
+        }),
+      ),
+      persistFinalObservation,
+      readFinalObservation: vi.fn(async (expected) => {
+        const observation = persisted.get(expected.runId);
+        return observation
+          ? Object.freeze({
+              runId: expected.runId,
+              sessionKey: expected.sessionKey,
+              usage: observation.usage,
+              result: Object.freeze({
+                runId: expected.runId,
+                sessionKey: expected.sessionKey,
+                digest: observation.result.digest,
+                byteLength: observation.result.byteLength,
+              }),
+            })
+          : undefined;
+      }),
+    });
+    if (!binding) throw new Error("Readiness #1 source run v6 binding was not created");
+
+    const launched = await binding.launch({
+      taskNodeId: "TASK_source_v6_123",
+      ticketId: "ticket-source-v6-123",
+      beforeProvider: async () => {},
+      onObservation: callerObservation,
+    });
+
+    expect(launched).toMatchObject({
+      kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+      runId: identity.runId,
+      workspaceDir: "/state/worktrees/wt-v6",
+    });
+    expect(Object.keys(launched).sort()).toEqual(
+      ["kind", "readFinalEvidence", "runId", "sessionKey", "workspaceDir"].sort(),
+    );
+    await expect(launched.readFinalEvidence()).resolves.toMatchObject({
+      state: "CONFIRMED",
+      runId: identity.runId,
+      usage: 42,
+      result: { digest: "f".repeat(64), byteLength: 128 },
+    });
+    expect(persistFinalObservation).toHaveBeenCalledWith(finalEvent);
+    expect(callerObservation).toHaveBeenCalledWith(finalEvent);
+    expect(launched).not.toHaveProperty("release");
+    expect(launched).not.toHaveProperty("cleanup");
   });
 
   it("retains the exclusive workspace when a failure follows native provider admission", async () => {

@@ -39,6 +39,7 @@ import {
   selectSourceDeliverablePayloads,
   type AgentCommandDeliveryResult,
 } from "./delivery-result.js";
+import { buildAgentRuntimeFinalObservation } from "./final-result-observation.js";
 import { createCommandBudget } from "./maintenance-budget.js";
 import { createCommandMaintenanceFollowup } from "./maintenance.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
@@ -667,6 +668,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
                 !current.pendingFinalDelivery.deliveries?.length)),
         });
       }
+    }
+
+    const finalObservation = buildAgentRuntimeFinalObservation(result);
+    if (finalObservation) {
+      await params.opts.runtimeExecutionObserver?.(finalObservation);
     }
 
     hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));

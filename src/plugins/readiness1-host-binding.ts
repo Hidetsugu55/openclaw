@@ -5,7 +5,12 @@ import type {
 } from "../agents/command/types.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
-import type { Readiness1SourceRunFinalSnapshot } from "./readiness1-source-run-evidence.js";
+import {
+  assessReadiness1SourceRunFinalEvidence,
+  type Readiness1SourceRunDurableResult,
+  type Readiness1SourceRunFinalEvidence,
+  type Readiness1SourceRunFinalSnapshot,
+} from "./readiness1-source-run-evidence.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
 
@@ -15,6 +20,7 @@ const READINESS1_SOURCE_RUN_BINDING_V2_KIND = "openclaw.readiness1.source-run-bi
 const READINESS1_SOURCE_RUN_BINDING_V3_KIND = "openclaw.readiness1.source-run-binding.v3";
 const READINESS1_SOURCE_RUN_BINDING_V4_KIND = "openclaw.readiness1.source-run-binding.v4";
 const READINESS1_SOURCE_RUN_BINDING_V5_KIND = "openclaw.readiness1.source-run-binding.v5";
+const READINESS1_SOURCE_RUN_BINDING_V6_KIND = "openclaw.readiness1.source-run-binding.v6";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -151,6 +157,41 @@ export type Readiness1SourceRunBindingV5 = Readonly<{
   launch: (
     request: Readiness1SourceRunLaunchRequest,
   ) => Promise<Readiness1SourceRunFinalSnapshotLaunch>;
+}>;
+
+/** A durable, run-owned result record with no model text or provider payload. */
+export type Readiness1SourceRunFinalObservation = Readonly<{
+  runId: string;
+  sessionKey: string;
+  usage: number;
+  result: Readiness1SourceRunDurableResult;
+}>;
+
+export type Readiness1SourceRunFinalObservationReader = (
+  expected: Readonly<{ runId: string; sessionKey: string }>,
+) => Promise<Readiness1SourceRunFinalObservation | undefined>;
+
+export type Readiness1SourceRunFinalObservationWriter = (
+  event: AgentRuntimeExecutionEvent,
+) => Promise<void>;
+
+/**
+ * V6 binds the final result digest and measured usage to the held V5 run.
+ * It does not expose result text, cleanup operations, or lease release.
+ */
+export type Readiness1SourceRunFinalEvidenceLaunch = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V6_KIND;
+  runId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  readFinalEvidence: () => Promise<Readiness1SourceRunFinalEvidence>;
+}>;
+
+export type Readiness1SourceRunBindingV6 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V6_KIND;
+  launch: (
+    request: Readiness1SourceRunLaunchRequest,
+  ) => Promise<Readiness1SourceRunFinalEvidenceLaunch>;
 }>;
 
 type Readiness1SourceRunLeaseGuard = Readonly<{
@@ -920,6 +961,94 @@ export function createReadiness1SourceRunBindingV5(params: {
   });
 }
 
+/**
+ * V6 consumes the held V5 run through two host closures: one records the
+ * bounded final event durably, the other reads that exact run record. Missing,
+ * malformed, or stale records deliberately remain UNKNOWN instead of being
+ * reconstructed from session history or terminal transcript metadata.
+ */
+export function createReadiness1SourceRunBindingV6(params: {
+  v5?: Readiness1SourceRunBindingV5;
+  assertCurrent: () => void;
+  waitForRun?: PluginRuntime["subagent"]["waitForRun"];
+  persistFinalObservation?: Readiness1SourceRunFinalObservationWriter;
+  readFinalObservation?: Readiness1SourceRunFinalObservationReader;
+}): Readiness1SourceRunBindingV6 | undefined {
+  const v5 = params.v5;
+  const waitForRun = params.waitForRun;
+  const persistFinalObservation = params.persistFinalObservation;
+  const readFinalObservation = params.readFinalObservation;
+  if (!v5 || !waitForRun || !persistFinalObservation || !readFinalObservation) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+    launch: async (request) => {
+      const launched = await v5.launch({
+        ...request,
+        onObservation: async (event) => {
+          if (event.observation.kind === "final") {
+            await persistFinalObservation(event);
+          }
+          await request.onObservation?.(event);
+        },
+      });
+      const expected = Object.freeze({
+        runId: launched.runId,
+        sessionKey: launched.sessionKey,
+        workspaceDir: launched.workspaceDir,
+      });
+      let evidenceRead: Promise<Readiness1SourceRunFinalEvidence> | undefined;
+      return Object.freeze({
+        kind: READINESS1_SOURCE_RUN_BINDING_V6_KIND,
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        workspaceDir: expected.workspaceDir,
+        readFinalEvidence: async () => {
+          if (evidenceRead) {
+            return await evidenceRead;
+          }
+          const read = (async () => {
+            try {
+              params.assertCurrent();
+              const wait = await waitForRun({
+                runId: expected.runId,
+                timeoutMs: SOURCE_TERMINAL_WAIT_TIMEOUT_MS,
+              });
+              const [snapshot, finalObservation] = await Promise.all([
+                launched.readFinalSnapshot(),
+                readFinalObservation({ runId: expected.runId, sessionKey: expected.sessionKey }),
+              ]);
+              params.assertCurrent();
+              const evidence = assessReadiness1SourceRunFinalEvidence({
+                expected,
+                observed: {
+                  runId: expected.runId,
+                  sessionKey: expected.sessionKey,
+                  wait,
+                  ...(finalObservation
+                    ? { usage: finalObservation.usage, result: finalObservation.result }
+                    : {}),
+                  snapshot,
+                },
+              });
+              if (evidence.state !== "CONFIRMED") {
+                evidenceRead = undefined;
+              }
+              return evidence;
+            } catch (error) {
+              evidenceRead = undefined;
+              throw error;
+            }
+          })();
+          evidenceRead = read;
+          return await read;
+        },
+      });
+    },
+  });
+}
+
 export {
   READINESS1_HOST_BINDING_KIND,
   READINESS1_PLUGIN_ID,
@@ -927,4 +1056,5 @@ export {
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
   READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V6_KIND,
 };
