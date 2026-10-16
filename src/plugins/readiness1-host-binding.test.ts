@@ -10,10 +10,12 @@ import {
   createReadiness1SourceRunBindingV2,
   createReadiness1SourceRunBindingV3,
   createReadiness1SourceRunBindingV4,
+  createReadiness1SourceRunBindingV5,
   READINESS1_HOST_BINDING_KIND,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V5_KIND,
 } from "./readiness1-host-binding.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -577,6 +579,152 @@ describe("createReadiness1HostBinding", () => {
     expect(releaseWorkspace).not.toHaveBeenCalled();
   });
 
+  it("reads a fixed final snapshot only after one exact terminal receipt", async () => {
+    const taskNodeId = "TASK_source_v5_123";
+    const ticketId = "ticket-source-v5-123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v5",
+      },
+      instructions: "Edit only the canonical source worktree and run the fixed tests.",
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v5-123",
+      worktreeBranch: "openclaw/readiness1-task-source-v5-123",
+    };
+    const releaseRunLease = vi.fn(async () => true);
+    const releaseWorkspace = vi.fn(async () => {});
+    const runWithExecutionControl = vi.fn(
+      async (
+        params: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[0],
+        control: Parameters<PluginRuntime["subagent"]["runWithExecutionControl"]>[1],
+      ) => {
+        const identity = Object.freeze({
+          runId: "native-source-v5",
+          sessionKey: params.sessionKey,
+          sessionId: "native-source-session",
+          lifecycleGeneration: "generation-1",
+          resourceOwnership: Object.freeze({
+            run: "gateway" as const,
+            session: "gateway" as const,
+            cleanup: "gateway" as const,
+          }),
+        });
+        await control.beforeProvider(identity);
+        return Object.freeze({
+          runId: identity.runId,
+          sessionKey: identity.sessionKey,
+          execution: identity,
+        });
+      },
+    );
+    let terminalReady = false;
+    let terminalRunId = "native-source-v5";
+    let snapshotValid = false;
+    const waitForRun = vi.fn(async () =>
+      terminalReady
+        ? {
+            status: "ok" as const,
+            providerStarted: true,
+            endedAt: 1_700_000_000_000,
+            terminalReceipt: {
+              runId: terminalRunId,
+              sessionId: "native-source-session",
+              turnId: "native-turn-v5",
+              requested: { provider: "codex", model: "gpt-5" },
+              effective: { provider: "codex", model: "gpt-5", responseModel: "gpt-5" },
+              successfulToolNames: [],
+              rerouted: false,
+              terminalDisposition: "silent" as const,
+            },
+          }
+        : { status: "timeout" as const },
+    );
+    const captureFinalSnapshot = vi.fn(async (expected: { workspaceDir: string }) =>
+      Object.freeze({
+        workspaceDir: expected.workspaceDir,
+        head: snapshotValid ? "d".repeat(40) : "invalid-head",
+        indexDigest: "e".repeat(64),
+        dirty: "",
+      }),
+    );
+    const binding = createReadiness1SourceRunBindingV5({
+      acquireSourceRunLease: vi.fn(async () => ({ release: releaseRunLease })),
+      bindSourceSession: vi.fn(async () => {}),
+      assertSourceSession: vi.fn(async () => {}),
+      captureFinalSnapshot,
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl,
+      waitForRun,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v5",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: releaseWorkspace,
+          removeIfLossless: vi.fn(async () => true),
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run v5 binding was not created");
+
+    const launched = await binding.launch({ taskNodeId, ticketId, beforeProvider: async () => {} });
+    expect(launched).toMatchObject({
+      kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+      runId: "native-source-v5",
+      workspaceDir: descriptor.contract.root,
+    });
+    expect(Object.keys(launched).sort()).toEqual(
+      ["kind", "readFinalSnapshot", "runId", "sessionKey", "workspaceDir"].sort(),
+    );
+    await expect(launched.readFinalSnapshot()).rejects.toThrow(/terminal receipt is unavailable/);
+    expect(captureFinalSnapshot).not.toHaveBeenCalled();
+    terminalReady = true;
+    terminalRunId = "other-source-v5";
+    await expect(launched.readFinalSnapshot()).rejects.toThrow(/terminal receipt is unavailable/);
+    expect(captureFinalSnapshot).not.toHaveBeenCalled();
+    terminalRunId = "native-source-v5";
+    await expect(launched.readFinalSnapshot()).rejects.toThrow(/snapshot is invalid/);
+    expect(captureFinalSnapshot).toHaveBeenCalledWith({ workspaceDir: descriptor.contract.root });
+    snapshotValid = true;
+    const [first, second] = await Promise.all([
+      launched.readFinalSnapshot(),
+      launched.readFinalSnapshot(),
+    ]);
+    expect(first).toEqual({
+      workspaceDir: descriptor.contract.root,
+      head: "d".repeat(40),
+      indexDigest: "e".repeat(64),
+      dirty: "",
+    });
+    expect(second).toBe(first);
+    expect(waitForRun).toHaveBeenCalledTimes(4);
+    expect(captureFinalSnapshot).toHaveBeenCalledTimes(2);
+    expect(releaseRunLease).not.toHaveBeenCalled();
+    expect(releaseWorkspace).not.toHaveBeenCalled();
+  });
+
   it("retains the exclusive workspace when a failure follows native provider admission", async () => {
     const taskNodeId = "TASK_source_v4_unknown";
     const descriptor = {
@@ -817,7 +965,8 @@ describe("createReadiness1HostBinding", () => {
         | "readiness1HostBinding"
         | "readiness1SourceRunBindingV2"
         | "readiness1SourceRunBindingV3"
-        | "readiness1SourceRunBindingV4" = "readiness1HostBinding",
+        | "readiness1SourceRunBindingV4"
+        | "readiness1SourceRunBindingV5" = "readiness1HostBinding",
     ) => {
       const builder = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
@@ -849,11 +998,15 @@ describe("createReadiness1HostBinding", () => {
     expect(
       resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV4"),
     ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V4_KIND });
+    expect(
+      resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV5"),
+    ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND });
     expect(resolveBinding("readiness1-native-controller", "global")).toBeUndefined();
     expect(resolveBinding("other", "bundled")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV2")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV3")).toBeUndefined();
     expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV4")).toBeUndefined();
+    expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV5")).toBeUndefined();
   });
 
   it("refuses source-session sandbox creation from every other plugin", async () => {

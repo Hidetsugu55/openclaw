@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
+import { runGit, runGitBytes } from "../agents/worktrees/git.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
@@ -23,11 +26,13 @@ import {
   createReadiness1SourceRunBindingV2,
   createReadiness1SourceRunBindingV3,
   createReadiness1SourceRunBindingV4,
+  createReadiness1SourceRunBindingV5,
   READINESS1_PLUGIN_ID,
   type Readiness1HostBinding,
   type Readiness1SourceRunBindingV2,
   type Readiness1SourceRunBindingV3,
   type Readiness1SourceRunBindingV4,
+  type Readiness1SourceRunBindingV5,
 } from "./readiness1-host-binding.js";
 import {
   capturePluginLifecycleAuthority,
@@ -226,6 +231,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     let readiness1SourceRunBindingV2: Readiness1SourceRunBindingV2 | null | undefined;
     let readiness1SourceRunBindingV3: Readiness1SourceRunBindingV3 | null | undefined;
     let readiness1SourceRunBindingV4: Readiness1SourceRunBindingV4 | null | undefined;
+    let readiness1SourceRunBindingV5: Readiness1SourceRunBindingV5 | null | undefined;
     const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
       if (readiness1HostBinding !== undefined) {
         return readiness1HostBinding ?? undefined;
@@ -506,6 +512,189 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       readiness1SourceRunBindingV4 = binding ?? null;
       return binding;
     };
+    const resolveReadiness1SourceRunBindingV5 = (): Readiness1SourceRunBindingV5 | undefined => {
+      if (readiness1SourceRunBindingV5 !== undefined) {
+        return readiness1SourceRunBindingV5 ?? undefined;
+      }
+      const binding = createReadiness1SourceRunBindingV5({
+        record,
+        assertCurrent: assertRuntimeCurrent,
+        openCanonicalTaskStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-canonical-tasks",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+        runWithExecutionControl: (params, control) =>
+          runtime.subagent.runWithExecutionControl(params, control),
+        waitForRun: (params) => runtime.subagent.waitForRun(params),
+        workspace: {
+          config: runtime.config,
+          sandbox: runtime.sandbox,
+          worktrees: runtime.worktrees,
+        },
+        acquireSourceRunLease: async (worktreeId) => {
+          const lease = await acquireWorktreeRunLease(worktreeId, { exclusive: true });
+          return Object.freeze({ release: () => lease.releaseWithReceipt() });
+        },
+        bindSourceSession: async (context) => {
+          assertRuntimeCurrent();
+          if (
+            context.sessionRoot !== context.workspaceDir ||
+            context.workspaceDir !== context.cwd
+          ) {
+            throw new Error("Readiness #1 source session root/workspace/cwd drift.");
+          }
+          const existing = runtime.agent.session.getSessionEntry({
+            agentId: context.agentId,
+            sessionKey: context.sessionKey,
+            readConsistency: "latest",
+          });
+          if (existing) {
+            if (
+              existing.sessionRoot !== context.sessionRoot ||
+              existing.spawnedCwd !== context.cwd ||
+              existing.spawnedWorkspaceDir !== context.workspaceDir ||
+              existing.permissionMode !== "workspace" ||
+              existing.sandbox !== "required" ||
+              !hasExactReadiness1SourceToolPolicy(existing, context.requiredToolNames)
+            ) {
+              throw new Error("Readiness #1 source session security identity drift.");
+            }
+            return;
+          }
+          const created = await runtime.agent.session.createSessionEntry({
+            cfg: structuredClone(runtime.config.current()) as OpenClawConfig,
+            key: context.sessionKey,
+            agentId: context.agentId,
+            spawnedWorkspaceDir: context.workspaceDir,
+            spawnedCwd: context.cwd,
+            sessionRoot: context.sessionRoot,
+            permissionMode: "workspace",
+            sandbox: "required",
+            sourceToolPolicy: "readiness1-source-v1",
+            initialEntry: { agentHarnessId: "openclaw" },
+          });
+          assertRuntimeCurrent();
+          if (
+            created.key !== context.sessionKey ||
+            created.agentId !== context.agentId ||
+            created.entry.sessionRoot !== context.sessionRoot ||
+            created.entry.spawnedWorkspaceDir !== context.workspaceDir ||
+            created.entry.spawnedCwd !== context.cwd ||
+            created.entry.permissionMode !== "workspace" ||
+            created.entry.sandbox !== "required" ||
+            !hasExactReadiness1SourceToolPolicy(created.entry, context.requiredToolNames)
+          ) {
+            throw new Error("Readiness #1 source session security identity drift.");
+          }
+        },
+        assertSourceSession: async (context) => {
+          assertRuntimeCurrent();
+          const existing = runtime.agent.session.getSessionEntry({
+            agentId: context.agentId,
+            sessionKey: context.sessionKey,
+            readConsistency: "latest",
+          });
+          if (
+            !existing ||
+            existing.sessionRoot !== context.sessionRoot ||
+            existing.spawnedCwd !== context.cwd ||
+            existing.spawnedWorkspaceDir !== context.workspaceDir ||
+            existing.permissionMode !== "workspace" ||
+            existing.sandbox !== "required" ||
+            !hasExactReadiness1SourceToolPolicy(existing, context.requiredToolNames)
+          ) {
+            throw new Error("Readiness #1 source session security identity drift.");
+          }
+        },
+        captureFinalSnapshot: async (expected) => {
+          const gitOptions = {
+            timeoutMs: 5_000,
+            maxOutputBytes: 1_048_576,
+            terminateOnOutputLimit: true,
+            killProcessTree: true,
+            env: {
+              GIT_COMMON_DIR: undefined,
+              GIT_DIR: undefined,
+              GIT_INDEX_FILE: undefined,
+              GIT_OPTIONAL_LOCKS: "0",
+              GIT_WORK_TREE: undefined,
+            },
+          };
+          const assertExactWorktree = async () => {
+            assertRuntimeCurrent();
+            const [root, realpath] = await Promise.all([
+              runtime.worktrees.resolveCheckoutRoot({ path: expected.workspaceDir }),
+              fs.realpath(expected.workspaceDir),
+            ]);
+            assertRuntimeCurrent();
+            if (root !== expected.workspaceDir || realpath !== expected.workspaceDir) {
+              throw new Error("Readiness #1 source final worktree identity drift.");
+            }
+          };
+          await assertExactWorktree();
+          const topLevel = await runGit(
+            expected.workspaceDir,
+            ["rev-parse", "--show-toplevel"],
+            gitOptions,
+          );
+          await assertExactWorktree();
+          const head = await runGit(
+            expected.workspaceDir,
+            ["rev-parse", "--verify", "HEAD^{commit}"],
+            gitOptions,
+          );
+          await assertExactWorktree();
+          const status = await runGit(
+            expected.workspaceDir,
+            ["status", "--porcelain=v2", "--untracked-files=all"],
+            gitOptions,
+          );
+          await assertExactWorktree();
+          const stage = await runGitBytes(
+            expected.workspaceDir,
+            ["ls-files", "--stage", "-z"],
+            gitOptions,
+          );
+          await assertExactWorktree();
+          if (
+            topLevel.termination !== "exit" ||
+            topLevel.code !== 0 ||
+            topLevel.stdout.trim() !== expected.workspaceDir ||
+            head.termination !== "exit" ||
+            head.code !== 0 ||
+            !/^[a-f0-9]{40}$/.test(head.stdout.trim()) ||
+            status.termination !== "exit" ||
+            status.code !== 0 ||
+            stage.termination !== "exit" ||
+            stage.code !== 0
+          ) {
+            throw new Error("Readiness #1 source final worktree snapshot is unavailable.");
+          }
+          return Object.freeze({
+            workspaceDir: expected.workspaceDir,
+            head: head.stdout.trim(),
+            indexDigest: createHash("sha256").update(stage.stdout).digest("hex"),
+            dirty: status.stdout.trimEnd(),
+          });
+        },
+        openLedgerStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-controller-ledger",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+      });
+      readiness1SourceRunBindingV5 = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -548,6 +737,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "readiness1SourceRunBindingV4") {
           return resolveReadiness1SourceRunBindingV4();
+        }
+        if (prop === "readiness1SourceRunBindingV5") {
+          return resolveReadiness1SourceRunBindingV5();
         }
         if (prop === "state") {
           const baseState = getRuntimeProperty();

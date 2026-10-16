@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   AgentRuntimeExecutionEvent,
   AgentRuntimeExecutionIdentity,
@@ -7,12 +6,14 @@ import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
+import type { Readiness1SourceRunFinalSnapshot } from "./readiness1-source-run-evidence.js";
 
 const READINESS1_PLUGIN_ID = "readiness1-native-controller";
 const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
 const READINESS1_SOURCE_RUN_BINDING_V2_KIND = "openclaw.readiness1.source-run-binding.v2";
 const READINESS1_SOURCE_RUN_BINDING_V3_KIND = "openclaw.readiness1.source-run-binding.v3";
 const READINESS1_SOURCE_RUN_BINDING_V4_KIND = "openclaw.readiness1.source-run-binding.v4";
+const READINESS1_SOURCE_RUN_BINDING_V5_KIND = "openclaw.readiness1.source-run-binding.v5";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -124,6 +125,29 @@ export type Readiness1SourceRunLaunch = Readonly<{
 export type Readiness1SourceRunBindingV4 = Readonly<{
   kind: typeof READINESS1_SOURCE_RUN_BINDING_V4_KIND;
   launch: (request: Readiness1SourceRunLaunchRequest) => Promise<Readiness1SourceRunLaunch>;
+}>;
+
+export type Readiness1SourceRunSnapshotReader = (
+  expected: Readonly<{ workspaceDir: string }>,
+) => Promise<Readiness1SourceRunFinalSnapshot>;
+
+/**
+ * V5 reads one final worktree snapshot after a run-owned terminal receipt.
+ * It intentionally has no result, usage, cleanup, or lease-release capability:
+ * those require separately reviewed host-owned evidence producers.
+ */
+export type Readiness1SourceRunFinalSnapshotLaunch = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V5_KIND;
+  runId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** Reads the fixed workspace only after an exact, successful terminal receipt. */
+  readFinalSnapshot: () => Promise<Readiness1SourceRunFinalSnapshot>;
+}>;
+
+export type Readiness1SourceRunBindingV5 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V5_KIND;
+  launch: (request: Readiness1SourceRunLaunchRequest) => Promise<Readiness1SourceRunFinalSnapshotLaunch>;
 }>;
 
 type Readiness1SourceRunLeaseGuard = Readonly<{
@@ -812,10 +836,92 @@ export function createReadiness1SourceRunBindingV4(params: {
   });
 }
 
+/**
+ * A separate v5 capability consumes v4's held source run only after its exact
+ * terminal receipt is available. It reads one final worktree snapshot through
+ * a host closure, never through plugin input. It does not infer a durable
+ * result or successful final evidence from session history.
+ */
+export function createReadiness1SourceRunBindingV5(params: {
+  record: Pick<PluginRecord, "id" | "origin">;
+  assertCurrent: () => void;
+  openLedgerStore: () => PluginStateKeyedStore<unknown>;
+  openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
+  runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  waitForRun?: PluginRuntime["subagent"]["waitForRun"];
+  workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
+  acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
+  bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+  assertSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+  /** Host closure that reads one exact managed-worktree final state. */
+  captureFinalSnapshot?: Readiness1SourceRunSnapshotReader;
+}): Readiness1SourceRunBindingV5 | undefined {
+  const v4 = createReadiness1SourceRunBindingV4(params);
+  const captureFinalSnapshot = params.captureFinalSnapshot;
+  if (!v4 || !captureFinalSnapshot) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+    launch: async (request) => {
+      const launched = await v4.launch(request);
+      const expected = Object.freeze({
+        runId: launched.runId,
+        sessionKey: launched.sessionKey,
+        workspaceDir: launched.workspaceDir,
+      });
+      let snapshotRead: Promise<Readiness1SourceRunFinalSnapshot> | undefined;
+      return Object.freeze({
+        kind: READINESS1_SOURCE_RUN_BINDING_V5_KIND,
+        runId: expected.runId,
+        sessionKey: expected.sessionKey,
+        workspaceDir: expected.workspaceDir,
+        readFinalSnapshot: async () => {
+          if (snapshotRead) {
+            return await snapshotRead;
+          }
+          const read = (async () => {
+            try {
+              params.assertCurrent();
+              const wait = await launched.awaitTerminal();
+              params.assertCurrent();
+              if (
+                wait.status !== "ok" ||
+                wait.providerStarted !== true ||
+                !Number.isFinite(wait.endedAt) ||
+                wait.terminalReceipt?.runId !== expected.runId
+              ) {
+                throw new Error("Readiness #1 source terminal receipt is unavailable.");
+              }
+              const snapshot = await captureFinalSnapshot({ workspaceDir: expected.workspaceDir });
+              params.assertCurrent();
+              if (
+                snapshot.workspaceDir !== expected.workspaceDir ||
+                !SHA1.test(snapshot.head) ||
+                !SHA256.test(snapshot.indexDigest) ||
+                typeof snapshot.dirty !== "string"
+              ) {
+                throw new Error("Readiness #1 source final worktree snapshot is invalid.");
+              }
+              return Object.freeze({ ...snapshot });
+            } catch (error) {
+              snapshotRead = undefined;
+              throw error;
+            }
+          })();
+          snapshotRead = read;
+          return await read;
+        },
+      });
+    },
+  });
+}
+
 export {
   READINESS1_HOST_BINDING_KIND,
   READINESS1_PLUGIN_ID,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
   READINESS1_SOURCE_RUN_BINDING_V4_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V5_KIND,
 };

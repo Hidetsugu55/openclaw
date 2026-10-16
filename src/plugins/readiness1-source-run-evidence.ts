@@ -5,20 +5,20 @@ export const READINESS1_SOURCE_RUN_FINAL_EVIDENCE_KIND =
 export const READINESS1_SOURCE_RUN_CLEANUP_EVIDENCE_KIND =
   "openclaw.readiness1.source-run-cleanup-evidence.v1" as const;
 
-type SourceRunIdentity = Readonly<{
+export type Readiness1SourceRunIdentity = Readonly<{
   runId: string;
   sessionKey: string;
   workspaceDir: string;
 }>;
 
-type DurableResult = Readonly<{
+export type Readiness1SourceRunDurableResult = Readonly<{
   runId: string;
   sessionKey: string;
   digest: string;
   byteLength: number;
 }>;
 
-type FinalSnapshot = Readonly<{
+export type Readiness1SourceRunFinalSnapshot = Readonly<{
   workspaceDir: string;
   head: string;
   indexDigest: string;
@@ -34,8 +34,8 @@ export type Readiness1SourceRunFinalEvidence = Readonly<{
   providerStarted: boolean;
   endedAt?: number;
   usage?: number;
-  result?: DurableResult;
-  snapshot?: FinalSnapshot;
+  result?: Readiness1SourceRunDurableResult;
+  snapshot?: Readiness1SourceRunFinalSnapshot;
 }>;
 
 export type Readiness1SourceRunCleanupEvidence = Readonly<{
@@ -47,19 +47,19 @@ export type Readiness1SourceRunCleanupEvidence = Readonly<{
 }>;
 
 export type Readiness1SourceRunFinalEvidenceInput = Readonly<{
-  expected: SourceRunIdentity;
+  expected: Readiness1SourceRunIdentity;
   observed: Readonly<{
     runId: string;
     sessionKey: string;
     wait: AgentWaitResult;
     usage?: number;
-    result?: DurableResult;
-    snapshot?: FinalSnapshot;
+    result?: Readiness1SourceRunDurableResult;
+    snapshot?: Readiness1SourceRunFinalSnapshot;
   }>;
 }>;
 
 export type Readiness1SourceRunCleanupEvidenceInput = Readonly<{
-  expected: SourceRunIdentity;
+  expected: Readiness1SourceRunIdentity;
   terminal: Readiness1SourceRunFinalEvidence;
   observed: Readonly<{
     runId: string;
@@ -77,7 +77,7 @@ export type Readiness1SourceRunCleanupEvidenceInput = Readonly<{
 const SHA1 = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 
-function validIdentity(value: SourceRunIdentity): boolean {
+function validIdentity(value: Readiness1SourceRunIdentity): boolean {
   return (
     typeof value.runId === "string" &&
     value.runId.length > 0 &&
@@ -89,13 +89,13 @@ function validIdentity(value: SourceRunIdentity): boolean {
 }
 
 function sameIdentity(
-  expected: SourceRunIdentity,
-  observed: Pick<SourceRunIdentity, "runId" | "sessionKey">,
+  expected: Readiness1SourceRunIdentity,
+  observed: Pick<Readiness1SourceRunIdentity, "runId" | "sessionKey">,
 ): boolean {
   return observed.runId === expected.runId && observed.sessionKey === expected.sessionKey;
 }
 
-function unknownFinal(expected: SourceRunIdentity): Readiness1SourceRunFinalEvidence {
+function unknownFinal(expected: Readiness1SourceRunIdentity): Readiness1SourceRunFinalEvidence {
   return Object.freeze({
     kind: READINESS1_SOURCE_RUN_FINAL_EVIDENCE_KIND,
     state: "UNKNOWN",
