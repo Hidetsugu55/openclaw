@@ -676,6 +676,7 @@ describe("createReadiness1HostBinding", () => {
       .fn()
       .mockResolvedValueOnce(descriptor)
       .mockResolvedValueOnce(descriptor)
+      .mockResolvedValueOnce(descriptor)
       .mockResolvedValueOnce({ ...descriptor, indexDigest: "c".repeat(64) });
     const releaseRunLease = vi.fn(async () => true);
     const releaseWorkspace = vi.fn(async () => {});
