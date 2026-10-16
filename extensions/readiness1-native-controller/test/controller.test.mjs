@@ -371,6 +371,35 @@ test('fixture continuation advances one durable lifecycle checkpoint at a time',
   assert.equal(cleaned.task.status, 'DONE');
 });
 
+test('continuation reconciliation treats CANCELLED as terminal without owner or provider work', async () => {
+  const reports = [];
+  const first = makeTool({
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const active = await activate(first.tool);
+  await first.ledger.mutate(contract.taskNodeId, active.revision, (state) => {
+    state.status = 'CANCELLED';
+    state.history.push({ kind: 'fixture_cancelled', at: 1_000 });
+    return state;
+  }, () => {});
+
+  const restarted = makeTool({
+    store: first.store,
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const reconciled = (await restarted.tool.execute('reconcile-cancelled', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.task.status, 'CANCELLED');
+  assert.deepEqual(reconciled.continuation, {
+    current: 'CANCELLED', plannedNext: null, ownerDecisionRequired: false, automaticResume: false,
+  });
+  assert.equal(reports.length, 0);
+  assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+});
+
 test('restart reconciliation reports an ambiguous run once without a duplicate writer', async () => {
   const reports = [];
   const first = makeTool({ sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; } });

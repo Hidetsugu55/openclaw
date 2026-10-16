@@ -241,11 +241,11 @@ export function createReadinessTool({
           return reportContinuationStop(task, checkpoint, 'AUTHORITY_EXPIRED_OR_REVOKED', 'OWNER_DECISION_REQUIRED');
         }
         const state = checkpoint.state;
-        if (state.status === 'DONE') {
+        if (['DONE', 'CANCELLED'].includes(state.status)) {
           return json({
             ok: true,
             task: safeRecord(checkpoint),
-            continuation: { current: 'DONE', plannedNext: null, ownerDecisionRequired: false, automaticResume: false },
+            continuation: { current: state.status, plannedNext: null, ownerDecisionRequired: false, automaticResume: false },
           });
         }
         if (state.status === 'WAITING_PROVIDER_CAPACITY') {
