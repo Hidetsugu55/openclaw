@@ -4,7 +4,8 @@ import { digest, scopeHash } from '../src/contract.js';
 import { TOOL_SCHEMA } from '../src/controller.js';
 import { effectKey, selectIntent } from '../src/readiness2/catalog.js';
 import { createExecutionGate, GATE_ACTIONS } from '../src/readiness2/gate.js';
-import { contract, makeTool } from './helpers.mjs';
+import { nativeWorkerSessionKey } from '../src/native-bridge.js';
+import { config, contract, makeTool } from './helpers.mjs';
 
 const sourceEffect = Object.freeze({
   class: 'filesystem',
@@ -448,7 +449,12 @@ test('normal CAS cannot add or replace activeBinding while reactivation can repl
 });
 
 test('G19-G20 G22-G24 G27 G31 G38 cancel and capacity UNKNOWN stay blocked without provider fallback', async () => {
+  let launches = 0;
   const { tool, calls } = gateHarness({
+    sourceRunBinding: Object.freeze({
+      kind: 'openclaw.readiness1.source-run-binding.v7',
+      async launch() { launches += 1; throw new Error('source launch must not run while capacity is exhausted'); },
+    }),
     readCapacity: async () => ({
       provider: 'codex',
       version: '1.0.0',
@@ -468,6 +474,7 @@ test('G19-G20 G22-G24 G27 G31 G38 cancel and capacity UNKNOWN stay blocked witho
   })).details.task;
   assert.equal(waiting.status, 'WAITING_PROVIDER_CAPACITY');
   assert.equal(waiting.attempts, 0);
+  assert.equal(launches, 0);
   assert.equal(calls.some(([name]) => name === 'provider.work'), false);
   const cancelled = (await tool.execute('cancel', {
     action: 'gate.cancel',
@@ -488,14 +495,23 @@ test('G19 G27 cancel after reservation wins the admission CAS and holds unresolv
   let providerStarted = false;
   const entered = new Promise((resolve) => { enteredResolve = resolve; });
   const proceed = new Promise((resolve) => { continueResolve = resolve; });
+  const runId = 'native-v7-cancel-race';
+  const sessionKey = nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId);
   const { tool, ledger } = gateHarness({
-    async startReservedExecution({ descriptor, admitExecutionStart }) {
+    sourceRunBinding: Object.freeze({
+      kind: 'openclaw.readiness1.source-run-binding.v7',
+      async launch(request) {
       enteredResolve();
       await proceed;
-      await admitExecutionStart();
+      await request.beforeProvider(Object.freeze({ runId, sessionKey }));
       providerStarted = true;
-      return { runId: descriptor.idempotencyKey, sessionKey: descriptor.sessionKey };
-    },
+      return Object.freeze({
+        kind: 'openclaw.readiness1.source-run-binding.v7', runId, sessionKey, workspaceDir: contract.root,
+        readFinalEvidence: async () => { throw new Error('cancelled run has no final evidence'); },
+        readCleanupEvidence: async () => { throw new Error('cancelled run has no cleanup evidence'); },
+      });
+      },
+    }),
   });
   const active = await activateGate(tool);
   const dispatch = tool.execute('dispatch', {
