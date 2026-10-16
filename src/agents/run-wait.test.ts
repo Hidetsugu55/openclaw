@@ -411,6 +411,15 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
 
     expect(result.sourceReplyDelivered).toBe(entry.expected);
+    if (entry.receiptRunId) {
+      expect(result.terminalReceipt).toBeUndefined();
+    } else {
+      expect(result.terminalReceipt).toMatchObject({
+        runId: "run-source-reply",
+        sessionId: "session-source",
+        turnId: "turn-source",
+      });
+    }
   });
 
   it("normalizes wait timeouts before sending agent.wait", async () => {

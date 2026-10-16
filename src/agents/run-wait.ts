@@ -96,6 +96,7 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
+    terminalReceipt: receipt?.runId === runId ? receipt : undefined,
     terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
     sourceReplyDelivered:
       receipt?.runId === runId && receipt.sourceReplyDelivered === true ? true : undefined,
