@@ -208,7 +208,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             {
               namespace: "readiness1-controller-ledger",
               retention: "retained",
-              maxEntries: 128,
             },
             assertRuntimeCurrent,
           ),

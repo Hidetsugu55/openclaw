@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  closePluginStateDatabaseAsync,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import {
   createReadiness1HostBinding,
   READINESS1_HOST_BINDING_KIND,
 } from "./readiness1-host-binding.js";
+import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
 
@@ -66,5 +72,37 @@ describe("createReadiness1HostBinding", () => {
     expect(binding).toMatchObject({ kind: READINESS1_HOST_BINDING_KIND });
     expect(resolveBinding("readiness1-native-controller", "global")).toBeUndefined();
     expect(resolveBinding("other", "bundled")).toBeUndefined();
+  });
+
+  it("opens the real retained ledger and rejects a retired runtime", async () => {
+    await withOpenClawTestState({ label: "readiness1-retained-ledger" }, async () => {
+      try {
+        const builder = createRuntimeTestRegistry(createPluginRuntime());
+        const record = createPluginRecord({
+          id: "readiness1-native-controller",
+          source: "/plugins/readiness1-native-controller/index.js",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        const api = builder.createApi(record, { config: {} });
+        const binding = (api.runtime as unknown as {
+          readiness1HostBinding?: ReturnType<typeof createReadiness1HostBinding>;
+        }).readiness1HostBinding;
+        expect(binding).toBeDefined();
+        if (!binding) throw new Error("Readiness #1 host binding was not injected");
+
+        const ledger = binding.openLedgerStore();
+        await ledger.register("status:task", { state: "UNACTIVATED" });
+        await expect(ledger.lookup("status:task")).resolves.toEqual({ state: "UNACTIVATED" });
+
+        revokePluginRecord(builder.registry, record);
+        expect(() => binding.openLedgerStore()).toThrow("runtime is no longer active");
+        await expect(ledger.lookup("status:task")).rejects.toThrow("runtime is no longer active");
+      } finally {
+        await closePluginStateDatabaseAsync();
+        resetPluginStateStoreForTests();
+      }
+    });
   });
 });
