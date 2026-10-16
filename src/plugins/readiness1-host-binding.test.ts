@@ -17,12 +17,14 @@ describe("createReadiness1HostBinding", () => {
   it("refuses every plugin except the bundled controller", () => {
     const assertCurrent = vi.fn();
     const openLedgerStore = vi.fn();
+    const openCanonicalTaskStore = vi.fn();
 
     expect(
       createReadiness1HostBinding({
         record: { id: "readiness1-native-controller", origin: "workspace" },
         assertCurrent,
         openLedgerStore,
+        openCanonicalTaskStore,
       }),
     ).toBeUndefined();
     expect(
@@ -30,20 +32,25 @@ describe("createReadiness1HostBinding", () => {
         record: { id: "other", origin: "bundled" },
         assertCurrent,
         openLedgerStore,
+        openCanonicalTaskStore,
       }),
     ).toBeUndefined();
     expect(assertCurrent).not.toHaveBeenCalled();
     expect(openLedgerStore).not.toHaveBeenCalled();
+    expect(openCanonicalTaskStore).not.toHaveBeenCalled();
   });
 
-  it("opens only the fixed retained ledger after rechecking lifecycle authority", () => {
+  it("opens only the fixed retained ledger after rechecking lifecycle authority", async () => {
     const assertCurrent = vi.fn();
     const store = {};
     const openLedgerStore = vi.fn(() => store);
+    const taskStore = { lookup: vi.fn() };
+    const openCanonicalTaskStore = vi.fn(() => taskStore);
     const binding = createReadiness1HostBinding({
       record: { id: "readiness1-native-controller", origin: "bundled" },
       assertCurrent,
       openLedgerStore: openLedgerStore as never,
+      openCanonicalTaskStore: openCanonicalTaskStore as never,
     });
 
     expect(binding).toBeDefined();
@@ -52,6 +59,14 @@ describe("createReadiness1HostBinding", () => {
     expect(binding?.openLedgerStore()).toBe(store);
     expect(assertCurrent).toHaveBeenCalledTimes(1);
     expect(openLedgerStore).toHaveBeenCalledTimes(1);
+    await expect(binding?.readCanonicalTask("status:task")).rejects.toThrow(
+      "canonical Task is unavailable",
+    );
+    expect(openCanonicalTaskStore).toHaveBeenCalledTimes(1);
+    expect(taskStore.lookup).toHaveBeenCalledWith("status:task");
+    await expect(binding?.readCanonicalTask("invalid task id")).rejects.toThrow(
+      "canonical Task id is invalid",
+    );
   });
 
   it("injects the binding only for the exact bundled controller runtime", () => {
@@ -96,9 +111,20 @@ describe("createReadiness1HostBinding", () => {
         await ledger.register("status:task", { state: "UNACTIVATED" });
         await expect(ledger.lookup("status:task")).resolves.toEqual({ state: "UNACTIVATED" });
 
+        const canonicalTasks = api.runtime.state.openKeyedStore<unknown>({
+          namespace: "readiness1-canonical-tasks",
+          retention: "retained",
+        });
+        const task = { taskNodeId: "status:task", source: "host-admin-apply" };
+        await canonicalTasks.register("status:task", task);
+        await expect(binding.readCanonicalTask("status:task")).resolves.toEqual(task);
+
         revokePluginRecord(builder.registry, record);
         expect(() => binding.openLedgerStore()).toThrow("runtime is no longer active");
         await expect(ledger.lookup("status:task")).rejects.toThrow("runtime is no longer active");
+        await expect(binding.readCanonicalTask("status:task")).rejects.toThrow(
+          "runtime is no longer active",
+        );
       } finally {
         await closePluginStateDatabaseAsync();
         resetPluginStateStoreForTests();

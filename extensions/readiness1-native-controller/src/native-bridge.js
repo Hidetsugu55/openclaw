@@ -5,7 +5,7 @@ export function nativeWorkerSessionKey(agentId, taskNodeId) {
   return `agent:${agentId}:subagent:workboard-readiness1-${digest(taskNodeId).slice(0, 24)}`;
 }
 
-export function createNativeBridge({ config, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
+export function createNativeBridge({ config, readCanonicalTask: readHostCanonicalTask, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
   const descriptors = new Map(config.tasks.map((descriptor) => [descriptor.contract.taskNodeId, descriptor]));
 
   function descriptor(taskNodeId) {
@@ -23,7 +23,12 @@ export function createNativeBridge({ config, prepareWorkspaceFixture, snapshotWo
   }
 
   return Object.freeze({
-    readCanonicalTask: async (taskNodeId) => descriptor(taskNodeId).contract,
+    readCanonicalTask: async (taskNodeId) => {
+      if (typeof readHostCanonicalTask === 'function') {
+        return readHostCanonicalTask(taskNodeId);
+      }
+      return descriptor(taskNodeId).contract;
+    },
 
     async assertOwnerApprovalAvailable() {
       requireThat(typeof ownerApprovalAvailable === 'function' && await ownerApprovalAvailable() === true, 'OWNER_APPROVAL_PUBLIC_SURFACE_UNAVAILABLE');

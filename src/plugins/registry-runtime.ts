@@ -202,6 +202,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const binding = createReadiness1HostBinding({
         record,
         assertCurrent: assertRuntimeCurrent,
+        openCanonicalTaskStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-canonical-tasks",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
         openLedgerStore: () =>
           createPluginStateKeyedStore<unknown>(
             pluginId,

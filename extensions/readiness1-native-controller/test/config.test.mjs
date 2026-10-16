@@ -111,6 +111,7 @@ test('only a host-issued runtime binding makes the durable status route availabl
   const binding = Object.freeze({
     kind: 'openclaw.readiness1.host-binding.v1',
     openLedgerStore() { return store; },
+    async readCanonicalTask() { return descriptor.contract; },
   });
   const { registration } = captureRegistration({ runtime: { readiness1HostBinding: binding } });
   const tool = registration.create(directOwnerContext());

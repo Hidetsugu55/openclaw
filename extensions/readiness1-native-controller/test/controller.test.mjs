@@ -22,6 +22,7 @@ test('host-issued ledger binding is the only non-fixture constructor path', () =
     hostBinding: Object.freeze({
       kind: 'openclaw.readiness1.host-binding.v1',
       openLedgerStore: () => memoryStore(),
+      readCanonicalTask: async () => contract,
     }),
   }));
 });

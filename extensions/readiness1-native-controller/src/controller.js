@@ -147,12 +147,21 @@ export function createReadinessTool({
       }
 
       exactArgs(params, ['action', 'taskNodeId', 'expectedRevision', 'approvalId', 'notification', 'candidateId'], ['taskNodeId']);
-      const task = await canonicalTask(params.taskNodeId);
 
       if (action === 'status') {
         exactArgs(params, ['action', 'taskNodeId'], ['taskNodeId']);
-        return json({ ok: true, task: safeRecord(await ledger.read(task.taskNodeId, assertCurrent)) });
+        requireThat(/^[A-Za-z0-9_:-]{3,512}$/.test(params.taskNodeId), 'canonical Task id invalid');
+        const record = await ledger.read(params.taskNodeId, assertCurrent);
+        if (!record) return json({ ok: true, task: null });
+        const task = await canonicalTask(params.taskNodeId);
+        requireThat(
+          equal(record.state.contract, task) && record.state.scopeHash === scopeHash(task),
+          'canonical Task revision/scope drift',
+        );
+        return json({ ok: true, task: safeRecord(record) });
       }
+
+      const task = await canonicalTask(params.taskNodeId);
 
       if (GATE_ACTIONS.includes(action)) {
         requireThat(executionGate, 'Execution Gate unbound');
