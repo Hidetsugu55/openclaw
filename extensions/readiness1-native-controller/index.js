@@ -102,6 +102,7 @@ function createStatusTool({ config, ctx, binding }) {
   const bridge = createNativeBridge({
     config,
     readCanonicalDescriptor: binding.readCanonicalDescriptor,
+    runCanonicalReadOnly: binding.runCanonicalReadOnly,
   });
   return createReadinessTool({
     config,

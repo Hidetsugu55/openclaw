@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createReadinessTool } from '../src/controller.js';
 import { createLedger } from '../src/ledger.js';
-import { createNativeBridge } from '../src/native-bridge.js';
+import { createNativeBridge, nativeWorkerSessionKey } from '../src/native-bridge.js';
 import { activate, config, contract, descriptor, makeTool, memoryStore } from './helpers.mjs';
 
 test('injected canonical controller path is explicitly fixture-only', () => {
@@ -56,6 +56,34 @@ test('public host descriptor read rejects a partial or mismatched fixed Task', a
     readCanonicalDescriptor: async () => ({ ...descriptor, contract: { ...contract, taskNodeId: 'TASK_other_456' } }),
   });
   await assert.rejects(mismatch.readCanonicalTask(contract.taskNodeId), /descriptor\/key mismatch/);
+});
+
+test('bridge forwards a host-stored READ Task only through native pre-provider admission', async () => {
+  const readContract = Object.freeze({ ...contract, actionClass: 'read' });
+  const readDescriptor = Object.freeze({ ...descriptor, contract: readContract });
+  const calls = [];
+  const bridge = createNativeBridge({
+    config: Object.freeze({ ...config, tasks: [] }),
+    readCanonicalDescriptor: async () => readDescriptor,
+    runCanonicalReadOnly: async (request) => {
+      calls.push(request);
+      const identity = Object.freeze({ sessionKey: nativeWorkerSessionKey(config.workerAgentId, readContract.taskNodeId) });
+      await request.beforeProvider(identity);
+      return { runId: 'native-read-run', sessionKey: identity.sessionKey, execution: identity };
+    },
+  });
+  let admitted = 0;
+
+  const result = await bridge.runCanonicalReadOnly({
+    taskNodeId: readContract.taskNodeId,
+    ticketId: 'ticket-read-456',
+    admit: async () => { admitted += 1; },
+  });
+  assert.equal(admitted, 1);
+  assert.equal(result.runId, 'native-read-run');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].taskNodeId, readContract.taskNodeId);
+  assert.equal(calls[0].ticketId, 'ticket-read-456');
 });
 
 test('thin adapter preserves canonical authority through native receipt, terminal readback, and cleanup', async () => {

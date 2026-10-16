@@ -5,7 +5,7 @@ export function nativeWorkerSessionKey(agentId, taskNodeId) {
   return `agent:${agentId}:subagent:workboard-readiness1-${digest(taskNodeId).slice(0, 24)}`;
 }
 
-export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
+export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, runCanonicalReadOnly: runHostCanonicalReadOnly, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
   const descriptors = new Map(config.tasks.map((descriptor) => [descriptor.contract.taskNodeId, descriptor]));
 
   async function descriptor(taskNodeId) {
@@ -31,6 +31,22 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
   return Object.freeze({
     readCanonicalTask: async (taskNodeId) => {
       return (await descriptor(taskNodeId)).contract;
+    },
+
+    async runCanonicalReadOnly({ taskNodeId, ticketId, admit, onObservation }) {
+      requireThat(typeof runHostCanonicalReadOnly === 'function', 'READ_ONLY_NATIVE_RUN_UNAVAILABLE');
+      requireThat(typeof admit === 'function', 'READ_ONLY_NATIVE_ADMISSION_UNAVAILABLE');
+      const fixed = await descriptor(taskNodeId);
+      const expectedSessionKey = nativeWorkerSessionKey(config.workerAgentId, fixed.contract.taskNodeId);
+      return runHostCanonicalReadOnly({
+        taskNodeId: fixed.contract.taskNodeId,
+        ticketId,
+        async beforeProvider(identity) {
+          requireThat(identity?.sessionKey === expectedSessionKey, 'native read-only session mismatch');
+          await admit(identity);
+        },
+        ...(typeof onObservation === 'function' ? { onObservation } : {}),
+      });
     },
 
     async assertOwnerApprovalAvailable() {
