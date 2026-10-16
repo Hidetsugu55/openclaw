@@ -16,6 +16,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
+import { createReadiness1HostBinding, type Readiness1HostBinding } from "./readiness1-host-binding.js";
 import {
   capturePluginLifecycleAuthority,
   getPluginRecordRegistry,
@@ -193,6 +194,28 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
       }
     };
+    let readiness1HostBinding: Readiness1HostBinding | null | undefined;
+    const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
+      if (readiness1HostBinding !== undefined) {
+        return readiness1HostBinding ?? undefined;
+      }
+      const binding = createReadiness1HostBinding({
+        record,
+        assertCurrent: assertRuntimeCurrent,
+        openLedgerStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-controller-ledger",
+              retention: "retained",
+              maxEntries: 128,
+            },
+            assertRuntimeCurrent,
+          ),
+      });
+      readiness1HostBinding = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -224,6 +247,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             return addPluginRuntimeResolutionContext({ error, record, prop });
           }
         };
+        if (prop === "readiness1HostBinding") {
+          return resolveReadiness1HostBinding();
+        }
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           return {
