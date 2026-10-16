@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { classifyFailoverReason } from "../failover/classify.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { AgentRuntimeExecutionObservation } from "./types.js";
 
@@ -33,6 +32,11 @@ export function emitAgentAttemptRuntimeStart(
   if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
     void onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
   }
+}
+
+function hasStructuredCapacityExhaustion(errorObservation: unknown): boolean {
+  const reason = asOptionalRecord(errorObservation)?.failoverReason;
+  return reason === "rate_limit" || reason === "billing";
 }
 
 export function createAgentAttemptLifecycleCallbacks(
@@ -78,10 +82,9 @@ export function createAgentAttemptLifecycleCallbacks(
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;
         state.lifecycleErrorObservation = asOptionalRecord(evt.data.errorObservation);
-        const reason = classifyFailoverReason(evt.data.error);
         await runtimeExecutionObserver?.({
           kind: "provider_error",
-          capacityExhausted: reason === "rate_limit" || reason === "billing",
+          capacityExhausted: hasStructuredCapacityExhaustion(evt.data.errorObservation),
         });
       }
       // Finishing means output ended but transcript/session persistence may still

@@ -105,7 +105,33 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     ]);
   });
 
-  it("classifies capacity failure without exposing provider error text", async () => {
+  it("uses only the structured capacity status without exposing provider error text", async () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const observe = vi.fn<(event: AgentRuntimeExecutionObservation) => Promise<void>>(
+      async () => {},
+    );
+    const callbacks = createAgentAttemptLifecycleCallbacks(state, undefined, observe);
+
+    await callbacks.onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "private provider detail",
+        errorObservation: { failoverReason: "rate_limit" },
+      },
+    });
+
+    expect(observe.mock.calls.map(([event]) => event)).toEqual([
+      { kind: "provider_error", capacityExhausted: true },
+      { kind: "terminal", status: "error" },
+    ]);
+  });
+
+  it("does not infer capacity exhaustion from provider error text", async () => {
     const state: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
@@ -122,7 +148,7 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     });
 
     expect(observe.mock.calls.map(([event]) => event)).toEqual([
-      { kind: "provider_error", capacityExhausted: true },
+      { kind: "provider_error", capacityExhausted: false },
       { kind: "terminal", status: "error" },
     ]);
   });
