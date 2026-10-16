@@ -213,6 +213,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           ),
         runWithExecutionControl: (params, control) =>
           runtime.subagent.runWithExecutionControl(params, control),
+        workspace: {
+          config: runtime.config,
+          sandbox: runtime.sandbox,
+          worktrees: runtime.worktrees,
+        },
         openLedgerStore: () =>
           createPluginStateKeyedStore<unknown>(
             pluginId,

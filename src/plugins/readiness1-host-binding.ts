@@ -15,6 +15,12 @@ const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
+const SOURCE_ACTION_CLASSES = new Set(["source"]);
+const SHA1 = /^[a-f0-9]{40}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+const WORKTREE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const WORKTREE_BRANCH = /^[A-Za-z0-9._/-]{1,256}$/;
+const REQUIRED_SOURCE_TOOLS = Object.freeze(["read", "exec", "apply_patch"] as const);
 
 export type Readiness1ReadOnlyRunRequest = Readonly<{
   taskNodeId: string;
@@ -23,11 +29,37 @@ export type Readiness1ReadOnlyRunRequest = Readonly<{
   onObservation?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
 }>;
 
+export type Readiness1WorkspacePrepareRequest = Readonly<{
+  taskNodeId: string;
+  claimId: string;
+}>;
+
+export type Readiness1WorkspacePrepareResult = Readonly<{
+  id: string;
+  path: string;
+  branch: string;
+  sandboxed: boolean;
+  workspaceAccess: "none" | "ro" | "rw";
+  confinementError?: string;
+}>;
+
 type CanonicalReadOnlyTask = Readonly<{
   provider: "claude-code" | "codex";
   instructions: string;
   role: string;
   taskNodeId: string;
+}>;
+
+type CanonicalSourceTask = Readonly<{
+  taskNodeId: string;
+  role: string;
+  provider: "claude-code" | "codex";
+  ref: string;
+  head: string;
+  root: string;
+  sourceRoot: string;
+  worktreeName: string;
+  worktreeBranch: string;
 }>;
 
 function canonicalReadOnlyTask(taskNodeId: string, value: unknown): CanonicalReadOnlyTask {
@@ -62,7 +94,67 @@ function canonicalReadOnlyTask(taskNodeId: string, value: unknown): CanonicalRea
   });
 }
 
-function readOnlySessionKey(task: CanonicalReadOnlyTask): string {
+function canonicalSourceTask(taskNodeId: string, value: unknown): CanonicalSourceTask {
+  const descriptor = value as {
+    contract?: {
+      actionClass?: unknown;
+      caps?: { provider?: unknown };
+      head?: unknown;
+      ref?: unknown;
+      role?: unknown;
+      root?: unknown;
+      taskNodeId?: unknown;
+    };
+    indexDigest?: unknown;
+    sourceRoot?: unknown;
+    worktreeBranch?: unknown;
+    worktreeName?: unknown;
+  } | undefined;
+  const contract = descriptor?.contract;
+  const provider = contract?.caps?.provider;
+  if (
+    contract?.taskNodeId !== taskNodeId
+    || typeof contract.role !== "string"
+    || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(contract.role)
+    || !SOURCE_ACTION_CLASSES.has(String(contract.actionClass))
+    || (provider !== "claude-code" && provider !== "codex")
+    || typeof contract.ref !== "string"
+    || !contract.ref.startsWith("refs/heads/")
+    || typeof contract.head !== "string"
+    || !SHA1.test(contract.head)
+    || !isAbsoluteCanonicalPath(contract.root)
+    || !isAbsoluteCanonicalPath(descriptor?.sourceRoot)
+    || typeof descriptor.worktreeName !== "string"
+    || !WORKTREE_NAME.test(descriptor.worktreeName)
+    || typeof descriptor.worktreeBranch !== "string"
+    || !WORKTREE_BRANCH.test(descriptor.worktreeBranch)
+    || descriptor.worktreeBranch !== `openclaw/${descriptor.worktreeName}`
+    || !SHA256.test(String(descriptor.indexDigest))
+  ) {
+    throw new Error("Readiness #1 canonical source Task is invalid.");
+  }
+  return Object.freeze({
+    taskNodeId,
+    role: contract.role,
+    provider,
+    ref: contract.ref,
+    head: contract.head,
+    root: contract.root,
+    sourceRoot: descriptor.sourceRoot,
+    worktreeName: descriptor.worktreeName,
+    worktreeBranch: descriptor.worktreeBranch,
+  });
+}
+
+function isAbsoluteCanonicalPath(value: unknown): value is string {
+  return (
+    typeof value === "string"
+    && value.startsWith("/")
+    && !value.split("/").some((part) => part === "." || part === "..")
+  );
+}
+
+function readiness1WorkerSessionKey(task: Pick<CanonicalReadOnlyTask, "taskNodeId" | "role">): string {
   const suffix = createHash("sha256").update(task.taskNodeId).digest("hex").slice(0, 24);
   return `agent:${task.role}:subagent:workboard-readiness1-${suffix}`;
 }
@@ -101,6 +193,14 @@ export type Readiness1HostBinding = Readonly<{
   runCanonicalReadOnly: (
     request: Readiness1ReadOnlyRunRequest,
   ) => Promise<PluginSubagentExecutionResult>;
+  /**
+   * Creates only the host-stored source Task's managed worktree, with the
+   * runtime's normal workboard owner and sandbox authority. It remains private
+   * until later source and terminal-observation bindings are accepted.
+   */
+  prepareCanonicalWorkspace: (
+    request: Readiness1WorkspacePrepareRequest,
+  ) => Promise<Readiness1WorkspacePrepareResult>;
 }>;
 
 export function createReadiness1HostBinding(params: {
@@ -109,6 +209,7 @@ export function createReadiness1HostBinding(params: {
   openLedgerStore: () => PluginStateKeyedStore<unknown>;
   openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
   runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
 }): Readiness1HostBinding | undefined {
   if (params.record.id !== READINESS1_PLUGIN_ID || params.record.origin !== "bundled") {
     return undefined;
@@ -145,7 +246,7 @@ export function createReadiness1HostBinding(params: {
         request.taskNodeId,
         await params.openCanonicalTaskStore().lookup(request.taskNodeId),
       );
-      const sessionKey = readOnlySessionKey(task);
+      const sessionKey = readiness1WorkerSessionKey(task);
       const accepted = await params.runWithExecutionControl(
         {
           assertCurrent: params.assertCurrent,
@@ -180,6 +281,102 @@ export function createReadiness1HostBinding(params: {
         throw new Error("Readiness #1 accepted read-only session identity drift.");
       }
       return accepted;
+    },
+    prepareCanonicalWorkspace: async (request) => {
+      if (
+        !request
+        || !TASK_NODE_ID.test(request.taskNodeId)
+        || !TICKET_ID.test(request.claimId)
+      ) {
+        throw new Error("Readiness #1 workspace request is invalid.");
+      }
+      const workspaceRuntime = params.workspace;
+      if (!workspaceRuntime) {
+        throw new Error("Readiness #1 workspace runtime is unavailable.");
+      }
+      params.assertCurrent();
+      const task = canonicalSourceTask(
+        request.taskNodeId,
+        await params.openCanonicalTaskStore().lookup(request.taskNodeId),
+      );
+      params.assertCurrent();
+      const resolvedRoot = await workspaceRuntime.worktrees.resolveCheckoutRoot({
+        path: task.sourceRoot,
+      });
+      params.assertCurrent();
+      if (resolvedRoot !== task.sourceRoot) {
+        throw new Error("Readiness #1 source checkout identity mismatch.");
+      }
+      const ownerId = `readiness1:${task.taskNodeId}:${request.claimId}`;
+      let created: Awaited<ReturnType<PluginRuntime["worktrees"]["create"]>> | undefined;
+      try {
+        created = await workspaceRuntime.worktrees.create({
+          repoRoot: task.sourceRoot,
+          name: task.worktreeName,
+          baseRef: task.head,
+          ownerKind: "workboard",
+          ownerId,
+          commitGuard: params.assertCurrent,
+        });
+        params.assertCurrent();
+        const resolvedWorkspaceRoot = await workspaceRuntime.worktrees.resolveCheckoutRoot({
+          path: created.path,
+        });
+        params.assertCurrent();
+        if (
+          created.path !== task.root
+          || resolvedWorkspaceRoot !== created.path
+          || created.branch !== task.worktreeBranch
+        ) {
+          throw new Error("Readiness #1 managed worktree identity mismatch.");
+        }
+        const authority = await workspaceRuntime.sandbox.prepareWorkspaceAuthority({
+          config: workspaceRuntime.config.current() as Parameters<
+            PluginRuntime["sandbox"]["prepareWorkspaceAuthority"]
+          >[0]["config"],
+          agentId: task.role,
+          sessionKey: readiness1WorkerSessionKey(task),
+          workspaceDir: created.path,
+          confinedToolNames: [],
+          requiredToolNames: REQUIRED_SOURCE_TOOLS,
+          modelProvider: task.provider,
+        });
+        params.assertCurrent();
+        if (
+          authority.sandboxed !== true
+          || authority.workspaceAccess !== "rw"
+          || authority.confinementError
+        ) {
+          throw new Error("Readiness #1 required worker sandbox is unavailable.");
+        }
+        return Object.freeze({
+          id: created.id,
+          path: created.path,
+          branch: created.branch,
+          sandboxed: authority.sandboxed,
+          workspaceAccess: authority.workspaceAccess,
+        });
+      } catch (error) {
+        if (created) {
+          try {
+            await workspaceRuntime.worktrees.release({ path: created.path });
+            const removed = await workspaceRuntime.worktrees.removeIfLossless({
+              path: created.path,
+              ownerKind: "workboard",
+              ownerId,
+            });
+            if (!removed) {
+              throw new Error("Readiness #1 workspace cleanup was not confirmed.");
+            }
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Readiness #1 workspace preparation failed with uncertain cleanup.",
+            );
+          }
+        }
+        throw error;
+      }
     },
   });
 }

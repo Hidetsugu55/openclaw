@@ -150,6 +150,130 @@ describe("createReadiness1HostBinding", () => {
     expect(runWithExecutionControl).toHaveBeenCalledTimes(1);
   });
 
+  it("prepares only the host-stored source Task through managed worktree and sandbox APIs", async () => {
+    const taskNodeId = "TASK_source_123";
+    const claimId = "ticket-source-123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-1",
+      },
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-123",
+      worktreeBranch: "openclaw/readiness1-task-source-123",
+    };
+    const assertCurrent = vi.fn();
+    const resolveCheckoutRoot = vi.fn(async ({ path }: { path: string }) =>
+      path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+    );
+    const create = vi.fn(async () => ({
+      id: "wt-1",
+      path: descriptor.contract.root,
+      branch: descriptor.worktreeBranch,
+    }));
+    const release = vi.fn(async () => {});
+    const removeIfLossless = vi.fn(async () => true);
+    const prepareWorkspaceAuthority = vi.fn(async () => ({
+      sandboxed: true as const,
+      workspaceAccess: "rw" as const,
+    }));
+    const binding = createReadiness1HostBinding({
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent,
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl: vi.fn() as never,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: { resolveCheckoutRoot, create, release, removeIfLossless } as never,
+        sandbox: { prepareWorkspaceAuthority } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 host binding was not created");
+
+    await expect(binding.prepareCanonicalWorkspace({ taskNodeId, claimId })).resolves.toEqual({
+      id: "wt-1",
+      path: descriptor.contract.root,
+      branch: descriptor.worktreeBranch,
+      sandboxed: true,
+      workspaceAccess: "rw",
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      repoRoot: descriptor.sourceRoot,
+      name: descriptor.worktreeName,
+      baseRef: descriptor.contract.head,
+      ownerKind: "workboard",
+      ownerId: `readiness1:${taskNodeId}:${claimId}`,
+      commitGuard: assertCurrent,
+    }));
+    expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: descriptor.contract.role,
+      workspaceDir: descriptor.contract.root,
+      requiredToolNames: ["read", "exec", "apply_patch"],
+      modelProvider: "codex",
+    }));
+    expect(release).not.toHaveBeenCalled();
+    expect(removeIfLossless).not.toHaveBeenCalled();
+  });
+
+  it("removes a mismatched host worktree and refuses the source Task", async () => {
+    const taskNodeId = "TASK_source_456";
+    const claimId = "ticket-source-456";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-2",
+      },
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-456",
+      worktreeBranch: "openclaw/readiness1-task-source-456",
+    };
+    const release = vi.fn(async () => {});
+    const removeIfLossless = vi.fn(async () => true);
+    const binding = createReadiness1HostBinding({
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl: vi.fn() as never,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({ id: "wt-2", path: "/wrong", branch: descriptor.worktreeBranch })),
+          release,
+          removeIfLossless,
+        } as never,
+        sandbox: { prepareWorkspaceAuthority: vi.fn() } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 host binding was not created");
+
+    await expect(binding.prepareCanonicalWorkspace({ taskNodeId, claimId })).rejects.toThrow(
+      "managed worktree identity mismatch",
+    );
+    expect(release).toHaveBeenCalledWith({ path: "/wrong" });
+    expect(removeIfLossless).toHaveBeenCalledWith({
+      path: "/wrong",
+      ownerKind: "workboard",
+      ownerId: `readiness1:${taskNodeId}:${claimId}`,
+    });
+  });
+
   it("injects the binding only for the exact bundled controller runtime", () => {
     const resolveBinding = (id: string, origin: "bundled" | "global") => {
       const builder = createRuntimeTestRegistry(createPluginRuntime());

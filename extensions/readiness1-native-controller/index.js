@@ -87,11 +87,12 @@ function hostBindingOf(api) {
     binding
       && typeof binding === 'object'
       && Object.isFrozen(binding)
-      && Object.keys(binding).sort().join(',') === 'kind,openLedgerStore,readCanonicalDescriptor,runCanonicalReadOnly'
+      && Object.keys(binding).sort().join(',') === 'kind,openLedgerStore,prepareCanonicalWorkspace,readCanonicalDescriptor,runCanonicalReadOnly'
       && binding.kind === 'openclaw.readiness1.host-binding.v1'
       && typeof binding.openLedgerStore === 'function'
       && typeof binding.readCanonicalDescriptor === 'function'
-      && typeof binding.runCanonicalReadOnly === 'function',
+      && typeof binding.runCanonicalReadOnly === 'function'
+      && typeof binding.prepareCanonicalWorkspace === 'function',
     'READINESS1_HOST_BINDING_INVALID',
   );
   return binding;
