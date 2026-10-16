@@ -11,6 +11,7 @@ const READINESS1_PLUGIN_ID = "readiness1-native-controller";
 const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
 const READINESS1_SOURCE_RUN_BINDING_V2_KIND = "openclaw.readiness1.source-run-binding.v2";
 const READINESS1_SOURCE_RUN_BINDING_V3_KIND = "openclaw.readiness1.source-run-binding.v3";
+const READINESS1_SOURCE_RUN_BINDING_V4_KIND = "openclaw.readiness1.source-run-binding.v4";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -91,6 +92,36 @@ export type Readiness1SourceRunBindingV3 = Readonly<{
   prepare: (request: Readiness1SourceRunPrepareRequest) => Promise<Readiness1SourceRunLease>;
 }>;
 
+export type Readiness1SourceRunLaunchRequest = Readonly<{
+  taskNodeId: string;
+  ticketId: string;
+  beforeProvider: (identity: AgentRuntimeExecutionIdentity) => Promise<void>;
+  onObservation?: (event: AgentRuntimeExecutionEvent) => void | Promise<void>;
+}>;
+
+/**
+ * The opaque launch receipt retains the exclusive workspace lease. A future
+ * lifecycle owner may release it only after it has independently produced a
+ * terminal and cleanup receipt; this binding never accepts a path or lease ID.
+ */
+export type Readiness1SourceRunLaunch = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V4_KIND;
+  runId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  release: () => Promise<void>;
+}>;
+
+/**
+ * v4 is the host-only launch half of the source-run contract. It composes v3's
+ * opaque lease with the same Gateway run that reaches the native pre-provider
+ * hook. No public tool, plugin configuration, or controller dispatch reads it.
+ */
+export type Readiness1SourceRunBindingV4 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V4_KIND;
+  launch: (request: Readiness1SourceRunLaunchRequest) => Promise<Readiness1SourceRunLaunch>;
+}>;
+
 type Readiness1SourceRunLeaseGuard = Readonly<{
   release: () => Promise<boolean>;
 }>;
@@ -112,6 +143,11 @@ type CanonicalSourceTask = Readonly<{
   sourceRoot: string;
   worktreeName: string;
   worktreeBranch: string;
+}>;
+
+type CanonicalSourceLaunchTask = Readonly<{
+  task: CanonicalSourceTask;
+  instructions: string;
 }>;
 
 function canonicalReadOnlyTask(taskNodeId: string, value: unknown): CanonicalReadOnlyTask {
@@ -200,6 +236,39 @@ function canonicalSourceTask(taskNodeId: string, value: unknown): CanonicalSourc
     worktreeName: descriptor.worktreeName,
     worktreeBranch: descriptor.worktreeBranch,
   });
+}
+
+function canonicalSourceLaunchTask(taskNodeId: string, value: unknown): CanonicalSourceLaunchTask {
+  const instructions = (value as { instructions?: unknown } | undefined)?.instructions;
+  if (
+    typeof instructions !== "string" ||
+    instructions.trim().length === 0 ||
+    instructions.length > 64 * 1024
+  ) {
+    throw new Error("Readiness #1 canonical source Task instructions are invalid.");
+  }
+  return Object.freeze({ task: canonicalSourceTask(taskNodeId, value), instructions });
+}
+
+function sameCanonicalSourceTask(left: CanonicalSourceTask, right: CanonicalSourceTask): boolean {
+  return (
+    left.taskNodeId === right.taskNodeId &&
+    left.role === right.role &&
+    left.provider === right.provider &&
+    left.ref === right.ref &&
+    left.head === right.head &&
+    left.root === right.root &&
+    left.sourceRoot === right.sourceRoot &&
+    left.worktreeName === right.worktreeName &&
+    left.worktreeBranch === right.worktreeBranch
+  );
+}
+
+function hasExactRequiredSourceTools(value: readonly string[]): boolean {
+  return (
+    value.length === REQUIRED_SOURCE_TOOLS.length &&
+    value.every((toolName, index) => toolName === REQUIRED_SOURCE_TOOLS[index])
+  );
 }
 
 function isAbsoluteCanonicalPath(value: unknown): value is string {
@@ -587,9 +656,149 @@ export function createReadiness1SourceRunBindingV3(params: {
   });
 }
 
+/**
+ * v4 deliberately remains a separate capability from v3 preparation. The
+ * future launch must use the very same host-held session/worktree authority at
+ * the final native pre-provider boundary; descriptor or session drift releases
+ * the lease without starting provider work.
+ */
+export function createReadiness1SourceRunBindingV4(params: {
+  record: Pick<PluginRecord, "id" | "origin">;
+  assertCurrent: () => void;
+  openLedgerStore: () => PluginStateKeyedStore<unknown>;
+  openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
+  runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
+  acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
+  bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+  /** Rechecks the persisted source session immediately before provider start. */
+  assertSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
+}): Readiness1SourceRunBindingV4 | undefined {
+  const v3 = createReadiness1SourceRunBindingV3(params);
+  const assertSourceSession = params.assertSourceSession;
+  if (!v3 || !assertSourceSession) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V4_KIND,
+    launch: async (request) => {
+      if (
+        !request ||
+        !TASK_NODE_ID.test(request.taskNodeId) ||
+        !TICKET_ID.test(request.ticketId) ||
+        typeof request.beforeProvider !== "function" ||
+        (request.onObservation !== undefined && typeof request.onObservation !== "function")
+      ) {
+        throw new Error("Readiness #1 source launch request is invalid.");
+      }
+      params.assertCurrent();
+      const initial = canonicalSourceLaunchTask(
+        request.taskNodeId,
+        await params.openCanonicalTaskStore().lookup(request.taskNodeId),
+      );
+      params.assertCurrent();
+      const lease = await v3.prepare({ taskNodeId: request.taskNodeId, claimId: request.ticketId });
+      let providerAdmissionPassed = false;
+      try {
+        const accepted = await lease.withContext(async (context) => {
+          if (
+            context.agentId !== initial.task.role ||
+            context.provider !== initial.task.provider ||
+            context.sessionRoot !== initial.task.root ||
+            context.workspaceDir !== initial.task.root ||
+            context.cwd !== initial.task.root ||
+            context.sandboxed !== true ||
+            context.workspaceAccess !== "rw" ||
+            !hasExactRequiredSourceTools(context.requiredToolNames)
+          ) {
+            throw new Error("Readiness #1 source launch context drift.");
+          }
+          params.assertCurrent();
+          await assertSourceSession(context);
+          params.assertCurrent();
+          const result = await params.runWithExecutionControl(
+            {
+              assertCurrent: params.assertCurrent,
+              sessionKey: context.sessionKey,
+              message: initial.instructions,
+              provider: context.provider,
+              promptMode: "minimal",
+              lightContext: true,
+              deliver: false,
+              idempotencyKey: request.ticketId,
+              cwd: context.cwd,
+            },
+            {
+              beforeProvider: async (identity) => {
+                params.assertCurrent();
+                const current = canonicalSourceLaunchTask(
+                  request.taskNodeId,
+                  await params.openCanonicalTaskStore().lookup(request.taskNodeId),
+                );
+                if (
+                  !sameCanonicalSourceTask(initial.task, current.task) ||
+                  current.instructions !== initial.instructions
+                ) {
+                  throw new Error("Readiness #1 canonical source Task drift before provider.");
+                }
+                await assertSourceSession(context);
+                requireExpectedIdentity(identity, context.sessionKey);
+                await request.beforeProvider(identity);
+                // Once the native start admission has returned, provider work may
+                // begin even if a later lifecycle check fails. Keep the lease
+                // retained for the future terminal/cleanup owner in that case.
+                providerAdmissionPassed = true;
+                params.assertCurrent();
+              },
+              ...(request.onObservation
+                ? {
+                    onObservation: async (event) => {
+                      params.assertCurrent();
+                      requireExpectedIdentity(event.identity, context.sessionKey);
+                      await request.onObservation?.(event);
+                    },
+                  }
+                : {}),
+            },
+          );
+          requireExpectedIdentity(result.execution, context.sessionKey);
+          if (result.sessionKey !== context.sessionKey) {
+            throw new Error("Readiness #1 accepted source session identity drift.");
+          }
+          return Object.freeze({ result, context });
+        });
+        return Object.freeze({
+          kind: READINESS1_SOURCE_RUN_BINDING_V4_KIND,
+          runId: accepted.result.runId,
+          sessionKey: accepted.result.sessionKey,
+          workspaceDir: accepted.context.workspaceDir,
+          release: lease.release,
+        });
+      } catch (error) {
+        if (providerAdmissionPassed) {
+          throw new AggregateError(
+            [error],
+            "Readiness #1 source launch is UNKNOWN after provider admission; workspace remains retained.",
+          );
+        }
+        try {
+          await lease.release();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Readiness #1 source launch failed with uncertain cleanup.",
+          );
+        }
+        throw error;
+      }
+    },
+  });
+}
+
 export {
   READINESS1_HOST_BINDING_KIND,
   READINESS1_PLUGIN_ID,
   READINESS1_SOURCE_RUN_BINDING_V2_KIND,
   READINESS1_SOURCE_RUN_BINDING_V3_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V4_KIND,
 };
