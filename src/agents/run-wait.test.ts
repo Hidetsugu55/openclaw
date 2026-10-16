@@ -419,6 +419,10 @@ describe("waitForAgentRun", () => {
         sessionId: "session-source",
         turnId: "turn-source",
       });
+      expect(Object.isFrozen(result.terminalReceipt)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.requested)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.effective)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.successfulToolNames)).toBe(true);
     }
   });
 

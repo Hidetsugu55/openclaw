@@ -29,8 +29,9 @@ import {
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
-import type { AgentWaitResult } from "./run-wait.types.js";
+import type { AgentWaitResult, AgentWaitTerminalReceipt } from "./run-wait.types.js";
 import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 import { bindAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 
@@ -76,12 +77,28 @@ type RawAgentWaitResponse = {
   terminalReceipt?: unknown;
 };
 
+function freezeRunOwnedTerminalReceipt(
+  receipt: AgentRunTerminalReceipt | undefined,
+  runId: string,
+): AgentWaitTerminalReceipt | undefined {
+  if (receipt?.runId !== runId) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...receipt,
+    requested: Object.freeze({ ...receipt.requested }),
+    effective: Object.freeze({ ...receipt.effective }),
+    successfulToolNames: Object.freeze([...receipt.successfulToolNames]),
+  });
+}
+
 function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
   runId: string,
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
   const receipt = normalizeAgentRunTerminalReceipt(wait?.terminalReceipt);
+  const terminalReceipt = freezeRunOwnedTerminalReceipt(receipt, runId);
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
   const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
   const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
@@ -96,10 +113,9 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
-    terminalReceipt: receipt?.runId === runId ? receipt : undefined,
+    terminalReceipt,
     terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
-    sourceReplyDelivered:
-      receipt?.runId === runId && receipt.sourceReplyDelivered === true ? true : undefined,
+    sourceReplyDelivered: terminalReceipt?.sourceReplyDelivered === true ? true : undefined,
   };
 }
 

@@ -2,6 +2,15 @@ import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-ru
 import type { AgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
+/** Immutable copy of a Gateway terminal receipt returned from `agent.wait`. */
+export type AgentWaitTerminalReceipt = Readonly<
+  Omit<AgentRunTerminalReceipt, "requested" | "effective" | "successfulToolNames">
+> & {
+  readonly requested: Readonly<AgentRunTerminalReceipt["requested"]>;
+  readonly effective: Readonly<AgentRunTerminalReceipt["effective"]>;
+  readonly successfulToolNames: readonly string[];
+};
+
 /** Normalized terminal or pending state returned by `agent.wait`. */
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
@@ -17,7 +26,7 @@ export type AgentWaitResult = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   /** Gateway-produced terminal fact, retained only when it belongs to the waited run. */
-  terminalReceipt?: AgentRunTerminalReceipt;
+  terminalReceipt?: AgentWaitTerminalReceipt;
   terminalReply?: AgentRunTerminalReplySnapshot;
   sourceReplyDelivered?: true;
 };
