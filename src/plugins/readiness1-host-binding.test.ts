@@ -505,6 +505,7 @@ describe("createReadiness1HostBinding", () => {
         });
       },
     );
+    const waitForRun = vi.fn(async () => ({ status: "timeout" as const }));
     const binding = createReadiness1SourceRunBindingV4({
       acquireSourceRunLease: vi.fn(async () => ({ release: releaseRunLease })),
       bindSourceSession: vi.fn(async () => {}),
@@ -514,6 +515,7 @@ describe("createReadiness1HostBinding", () => {
       openLedgerStore: vi.fn() as never,
       openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
       runWithExecutionControl,
+      waitForRun,
       workspace: {
         config: { current: vi.fn(() => ({})) } as never,
         worktrees: {
@@ -564,7 +566,10 @@ describe("createReadiness1HostBinding", () => {
     expect(runWithExecutionControl.mock.calls[0]?.[0]).not.toHaveProperty("toolsAlsoAllow");
     expect(assertSourceSession).toHaveBeenCalledTimes(2);
     expect(beforeProvider).toHaveBeenCalledTimes(1);
+    await expect(launched.awaitTerminal()).resolves.toEqual({ status: "timeout" });
+    expect(waitForRun).toHaveBeenCalledWith({ runId: "native-source-run", timeoutMs: 30_000 });
     await expect(launched.release()).resolves.toBeUndefined();
+    await expect(launched.awaitTerminal()).rejects.toThrow("unavailable after release");
     expect(releaseRunLease).toHaveBeenCalledTimes(1);
     expect(releaseWorkspace).toHaveBeenCalledWith({ path: descriptor.contract.root });
   });
@@ -618,6 +623,7 @@ describe("createReadiness1HostBinding", () => {
       openLedgerStore: vi.fn() as never,
       openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
       runWithExecutionControl,
+      waitForRun: vi.fn() as never,
       workspace: {
         config: { current: vi.fn(() => ({})) } as never,
         worktrees: {
@@ -711,6 +717,7 @@ describe("createReadiness1HostBinding", () => {
       openLedgerStore: vi.fn() as never,
       openCanonicalTaskStore: vi.fn(() => ({ lookup })) as never,
       runWithExecutionControl,
+      waitForRun: vi.fn() as never,
       workspace: {
         config: { current: vi.fn(() => ({})) } as never,
         worktrees: {

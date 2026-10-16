@@ -3,6 +3,7 @@ import type {
   AgentRuntimeExecutionEvent,
   AgentRuntimeExecutionIdentity,
 } from "../agents/command/types.js";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
@@ -21,6 +22,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const WORKTREE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKTREE_BRANCH = /^[A-Za-z0-9._/-]{1,256}$/;
 const REQUIRED_SOURCE_TOOLS = Object.freeze(["read", "exec", "apply_patch"] as const);
+const SOURCE_TERMINAL_WAIT_TIMEOUT_MS = 30_000;
 
 export type Readiness1ReadOnlyRunRequest = Readonly<{
   taskNodeId: string;
@@ -109,6 +111,8 @@ export type Readiness1SourceRunLaunch = Readonly<{
   runId: string;
   sessionKey: string;
   workspaceDir: string;
+  /** Waits only for this exact held run with a host-fixed observation budget. */
+  awaitTerminal: () => Promise<AgentWaitResult>;
   release: () => Promise<void>;
 }>;
 
@@ -671,6 +675,7 @@ export function createReadiness1SourceRunBindingV4(params: {
   openLedgerStore: () => PluginStateKeyedStore<unknown>;
   openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
   runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  waitForRun?: PluginRuntime["subagent"]["waitForRun"];
   workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
   acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
   bindSourceSession?: (context: Readiness1SourceRunContext) => Promise<void>;
@@ -679,7 +684,8 @@ export function createReadiness1SourceRunBindingV4(params: {
 }): Readiness1SourceRunBindingV4 | undefined {
   const v3 = createReadiness1SourceRunBindingV3(params);
   const assertSourceSession = params.assertSourceSession;
-  if (!v3 || !assertSourceSession) {
+  const waitForRun = params.waitForRun;
+  if (!v3 || !assertSourceSession || !waitForRun) {
     return undefined;
   }
   return Object.freeze({
@@ -770,12 +776,28 @@ export function createReadiness1SourceRunBindingV4(params: {
           }
           return Object.freeze({ result, context });
         });
+        let releaseStarted = false;
         return Object.freeze({
           kind: READINESS1_SOURCE_RUN_BINDING_V4_KIND,
           runId: accepted.result.runId,
           sessionKey: accepted.result.sessionKey,
           workspaceDir: accepted.context.workspaceDir,
-          release: lease.release,
+          awaitTerminal: async () => {
+            if (releaseStarted) {
+              throw new Error("Readiness #1 source terminal wait is unavailable after release.");
+            }
+            params.assertCurrent();
+            const wait = await waitForRun({
+              runId: accepted.result.runId,
+              timeoutMs: SOURCE_TERMINAL_WAIT_TIMEOUT_MS,
+            });
+            params.assertCurrent();
+            return wait;
+          },
+          release: async () => {
+            releaseStarted = true;
+            await lease.release();
+          },
         });
       } catch (error) {
         if (providerAdmissionPassed) {

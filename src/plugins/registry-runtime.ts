@@ -412,6 +412,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           ),
         runWithExecutionControl: (params, control) =>
           runtime.subagent.runWithExecutionControl(params, control),
+        waitForRun: (params) => runtime.subagent.waitForRun(params),
         workspace: {
           config: runtime.config,
           sandbox: runtime.sandbox,
