@@ -106,7 +106,8 @@ export function approvalHarness(now = () => 1_000) {
 
 export function makeTool(overrides = {}) {
   const now = overrides.now ?? (() => 1_000);
-  const ledger = createLedger(memoryStore(), now);
+  const store = overrides.store ?? memoryStore();
+  const ledger = overrides.ledger ?? createLedger(store, now);
   const calls = [];
   const runtime = {
     config: { current: () => ({}) },
@@ -156,7 +157,7 @@ export function makeTool(overrides = {}) {
     },
     sourceRunLifecycle: Object.hasOwn(overrides, 'sourceRunBinding') ? createSourceRunLifecycle({ sourceRunBinding: overrides.sourceRunBinding, now }) : undefined,
     ownerApprovalAvailable: async () => true,
-    sendFixedOwnerDM: async () => ({ confirmed: true }),
+    sendFixedOwnerDM: overrides.sendFixedOwnerDM ?? (async () => ({ confirmed: true })),
     coordinateFixedTask: overrides.coordinateFixedTask ?? (async () => ({ confirmed: true })),
   });
   const approvalState = approvalHarness(now);
@@ -181,7 +182,7 @@ export function makeTool(overrides = {}) {
     fixtureOnly: true,
     now,
   });
-  return { tool, ledger, calls, runtime, approval, approvalState, executionGate };
+  return { tool, ledger, store, calls, runtime, approval, approvalState, executionGate };
 }
 
 export async function activate(tool) {

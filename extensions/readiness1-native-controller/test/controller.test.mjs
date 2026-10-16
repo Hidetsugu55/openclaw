@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createReadinessTool } from '../src/controller.js';
+import { createReadinessTool, TOOL_SCHEMA } from '../src/controller.js';
 import { createLedger } from '../src/ledger.js';
 import { createNativeBridge, nativeWorkerSessionKey } from '../src/native-bridge.js';
 import { activate, config, contract, descriptor, makeTool, memoryStore } from './helpers.mjs';
@@ -335,4 +335,125 @@ test('fixture-only execution callback performs no provider work when admission i
     assert.equal(result.ok, false);
     assert.equal(calls.filter(([name]) => name === 'provider.work').length, 0);
   }
+});
+
+test('fixture continuation advances one durable lifecycle checkpoint at a time', async () => {
+  const { tool, calls } = makeTool();
+  let task = await activate(tool);
+
+  const dispatched = (await tool.execute('continue-dispatch', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  task = dispatched.task;
+  assert.equal(dispatched.ok, true);
+  assert.equal(dispatched.continuation.completedStep, 'dispatch');
+  assert.equal(dispatched.continuation.plannedNext, 'observe');
+  assert.equal(task.status, 'RUNNING');
+  assert.equal(calls.filter(([name]) => name === 'provider.work').length, 1);
+
+  const observed = (await tool.execute('continue-observe', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  task = observed.task;
+  assert.equal(observed.ok, true);
+  assert.equal(observed.continuation.completedStep, 'observe');
+  assert.equal(observed.continuation.plannedNext, 'cleanup');
+  assert.equal(task.status, 'ACTIVE');
+  assert.equal(task.cleanup, 'pending');
+  assert.equal(calls.filter(([name]) => name === 'provider.work').length, 1);
+
+  const cleaned = (await tool.execute('continue-cleanup', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(cleaned.ok, true);
+  assert.equal(cleaned.continuation.completedStep, 'cleanup');
+  assert.equal(cleaned.continuation.plannedNext, null);
+  assert.equal(cleaned.task.status, 'DONE');
+});
+
+test('restart reconciliation reports an ambiguous run once without a duplicate writer', async () => {
+  const reports = [];
+  const first = makeTool({ sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; } });
+  let task = await activate(first.tool);
+  task = (await first.tool.execute('dispatch-before-restart', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'RUNNING');
+
+  const restarted = makeTool({
+    store: first.store,
+    observeNativeRun: async () => { throw new Error('restart lost native observation handle'); },
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const blocked = (await restarted.tool.execute('reconcile-after-restart', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'OUTCOME_UNKNOWN');
+  assert.equal(blocked.task.status, 'OUTCOME_UNKNOWN');
+  assert.deepEqual(blocked.continuation, {
+    current: 'OUTCOME_UNKNOWN', plannedNext: 'OWNER_DECISION_REQUIRED',
+    ownerDecisionRequired: true, automaticResume: false,
+  });
+  assert.deepEqual(blocked.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(restarted.calls.filter(([name]) => name === 'provider.work').length, 0);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].text, /current=OUTCOME_UNKNOWN/);
+  assert.match(reports[0].text, /planned-next=OWNER_DECISION_REQUIRED/);
+  assert.match(reports[0].text, /automatic-resume=no/);
+
+  const repeated = (await restarted.tool.execute('reconcile-repeat', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.deepEqual(repeated.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(reports.length, 1);
+});
+
+test('capacity wait reports the safe checkpoint rather than silently idling', async () => {
+  const reports = [];
+  const { tool, calls } = makeTool({
+    readCapacity: async () => ({
+      provider: 'codex', version: '1.0.0', source: 'native-structured', workCalls: 0,
+      capacity: 'exhausted', paidOverflow: 'off', resetAt: 5_000,
+    }),
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  await activate(tool);
+  const blocked = (await tool.execute('continue-capacity', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'PROVIDER_CAPACITY_WAIT');
+  assert.equal(blocked.task.status, 'WAITING_PROVIDER_CAPACITY');
+  assert.deepEqual(blocked.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(calls.some(([name]) => name === 'provider.work'), false);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].text, /current=WAITING_PROVIDER_CAPACITY/);
+  assert.match(reports[0].text, /planned-next=capacity.resume/);
+});
+
+test('plan-drift checkpoint is reported with the required visible prefix', async () => {
+  const reports = [];
+  const { tool, ledger } = makeTool({
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const active = await activate(tool);
+  await ledger.mutate(contract.taskNodeId, active.revision, (state) => {
+    state.cleanup = 'pending';
+    return state;
+  }, () => {});
+
+  const blocked = (await tool.execute('continue-drift', {
+    action: 'continuation.reconcile', taskNodeId: contract.taskNodeId,
+  })).details;
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'UNEXPECTED_CHECKPOINT');
+  assert.equal(blocked.continuation.planDrift, true);
+  assert.deepEqual(blocked.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].text, /予定している進行プランとずれそうです/);
+});
+
+test('continuation reconciliation remains outside the production tool schema', () => {
+  assert.equal(TOOL_SCHEMA.properties.action.enum.includes('continuation.reconcile'), false);
 });

@@ -22,7 +22,7 @@ export const TOOL_ACTIONS = Object.freeze([
   'capacity.resume', ...COORDINATION_ACTIONS, 'notify.owner', 'acceptance.run',
 ]);
 const FIXTURE_TOOL_ACTIONS = Object.freeze([
-  ...new Set([...TOOL_ACTIONS, ...READ_ACTIONS, ...GATE_ACTIONS]),
+  ...new Set([...TOOL_ACTIONS, ...READ_ACTIONS, ...GATE_ACTIONS, 'continuation.reconcile']),
 ]);
 
 export const TOOL_SCHEMA = {
@@ -135,14 +135,70 @@ export function createReadinessTool({
     return record;
   }
 
-  return {
+  async function reportContinuationStop(task, record, reason, plannedNext, planDrift = false) {
+    requireThat(record?.state, 'continuation checkpoint is unavailable');
+    const summary = [
+      ...(planDrift ? ['予定している進行プランとずれそうです'] : []),
+      `current=${record.state.status}`,
+      `planned-next=${plannedNext}`,
+      `reason=${reason}`,
+      'owner-decision=required',
+      'automatic-resume=no',
+    ].join('; ');
+    const payload = Object.freeze({ kind: 'BLOCKED', summary });
+    const eventId = bridge.notificationEventId(task, payload);
+    const key = digest({ taskNodeId: task.taskNodeId, eventId });
+    const existing = record.state.notifications.find((entry) => entry.key === key);
+    if (existing) {
+      return json({
+        ok: false,
+        reason,
+        task: safeRecord(record),
+        continuation: {
+          current: record.state.status,
+          plannedNext,
+          ownerDecisionRequired: true,
+          automaticResume: false,
+          ...(planDrift ? { planDrift: true } : {}),
+        },
+        ownerReport: { delivery: existing.status, readback: true },
+      });
+    }
+    const notified = await notifyOwner({
+      ledger: { mutate: (id, rev, reduce) => ledger.mutate(id, rev, reduce, assertCurrent) },
+      taskNodeId: task.taskNodeId,
+      expectedRevision: record.revision,
+      eventId,
+      payload,
+      policy: config.notification,
+      sendFixedOwnerDM: bridge.sendFixedOwnerDM,
+      now: now(),
+    });
+    const notification = notified.state.notifications.find((entry) => entry.key === key);
+    requireThat(notification, 'continuation Owner report readback is unavailable');
+    return json({
+      ok: false,
+      reason,
+      task: safeRecord(notified),
+      continuation: {
+        current: notified.state.status,
+        plannedNext,
+        ownerDecisionRequired: true,
+        automaticResume: false,
+        ...(planDrift ? { planDrift: true } : {}),
+      },
+      ownerReport: { delivery: notification.status, readback: true },
+    });
+  }
+
+  const tool = {
     name: TOOL_NAME,
     label: 'Readiness #1 Task',
     description: 'Closed Task-ID controller over one canonical authority. No repository, path, agent, recipient, command, or tool override is accepted.',
-    parameters: executionGate ? FIXTURE_TOOL_SCHEMA : TOOL_SCHEMA,
+    parameters: fixtureOnly ? FIXTURE_TOOL_SCHEMA : TOOL_SCHEMA,
     async execute(_toolCallId, params) {
       assertController(config, ctx);
-      const actions = executionGate ? FIXTURE_TOOL_ACTIONS : TOOL_ACTIONS;
+      const actions = fixtureOnly ? FIXTURE_TOOL_ACTIONS : TOOL_ACTIONS;
       requireThat(actions.includes(params?.action), 'catalog action refused');
       const action = params.action;
 
@@ -167,6 +223,83 @@ export function createReadinessTool({
       }
 
       const task = await canonicalTask(params.taskNodeId);
+
+      if (action === 'continuation.reconcile') {
+        exactArgs(params, ['action', 'taskNodeId'], ['taskNodeId']);
+        const checkpoint = await ledger.read(task.taskNodeId, assertCurrent);
+        requireThat(
+          checkpoint?.state
+            && equal(checkpoint.state.contract, task)
+            && checkpoint.state.scopeHash === scopeHash(task),
+          'canonical Task continuation checkpoint drift',
+        );
+        const authorityValid = checkpoint.state.receipt.valid === true
+          && now() < checkpoint.state.receipt.expiresAt
+          && now() < task.deadline
+          && now() < task.hardSunset;
+        if (!authorityValid) {
+          return reportContinuationStop(task, checkpoint, 'AUTHORITY_EXPIRED_OR_REVOKED', 'OWNER_DECISION_REQUIRED');
+        }
+        const state = checkpoint.state;
+        if (state.status === 'DONE') {
+          return json({
+            ok: true,
+            task: safeRecord(checkpoint),
+            continuation: { current: 'DONE', plannedNext: null, ownerDecisionRequired: false, automaticResume: false },
+          });
+        }
+        if (state.status === 'WAITING_PROVIDER_CAPACITY') {
+          return reportContinuationStop(task, checkpoint, 'PROVIDER_CAPACITY_WAIT', 'capacity.resume');
+        }
+        if (state.status === 'OUTCOME_UNKNOWN') {
+          return reportContinuationStop(task, checkpoint, 'OUTCOME_UNKNOWN', 'OWNER_DECISION_REQUIRED');
+        }
+        const next = state.status === 'ACTIVE' && state.cleanup === 'clear' && !state.writer && !state.ticket && state.reserved === 0
+          ? { action: 'dispatch', plannedNext: 'observe', expectedStatus: 'RUNNING' }
+          : state.status === 'RUNNING' && state.writer?.runId && state.ticket?.activeId
+            ? { action: 'observe', plannedNext: 'cleanup', expectedStatus: 'ACTIVE' }
+            : state.status === 'ACTIVE' && state.cleanup === 'pending' && state.workspace && !state.writer && !state.ticket
+              ? { action: 'cleanup', plannedNext: null, expectedStatus: 'DONE' }
+              : null;
+        if (!next) {
+          return reportContinuationStop(task, checkpoint, 'UNEXPECTED_CHECKPOINT', 'OWNER_DECISION_REQUIRED', true);
+        }
+        const continued = await tool.execute(`continuation:${next.action}`, {
+          action: next.action,
+          taskNodeId: task.taskNodeId,
+          expectedRevision: checkpoint.revision,
+        });
+        const latest = await ledger.read(task.taskNodeId, assertCurrent);
+        requireThat(latest?.state, 'continuation checkpoint was lost');
+        if (latest.state.status === 'OUTCOME_UNKNOWN') {
+          return reportContinuationStop(task, latest, 'OUTCOME_UNKNOWN', 'OWNER_DECISION_REQUIRED');
+        }
+        if (latest.state.status === 'WAITING_PROVIDER_CAPACITY') {
+          return reportContinuationStop(task, latest, 'PROVIDER_CAPACITY_WAIT', 'capacity.resume');
+        }
+        if (next.action === 'observe' && continued.details?.reason === 'NATIVE_RUN_PENDING') {
+          return json({
+            ok: false,
+            reason: 'NATIVE_RUN_PENDING',
+            task: safeRecord(latest),
+            continuation: { current: latest.state.status, plannedNext: 'observe', ownerDecisionRequired: false, automaticResume: true },
+          });
+        }
+        if (latest.state.status !== next.expectedStatus) {
+          return reportContinuationStop(task, latest, 'CONTINUATION_STEP_DID_NOT_REACH_EXPECTED_CHECKPOINT', next.plannedNext ?? 'DONE', true);
+        }
+        return json({
+          ok: continued.details?.ok === true,
+          task: safeRecord(latest),
+          continuation: {
+            current: latest.state.status,
+            completedStep: next.action,
+            plannedNext: next.plannedNext,
+            ownerDecisionRequired: false,
+            automaticResume: next.plannedNext !== null,
+          },
+        });
+      }
 
       if (GATE_ACTIONS.includes(action)) {
         requireThat(executionGate, 'Execution Gate unbound');
@@ -581,4 +714,5 @@ export function createReadinessTool({
       throw new Error('unsupported closed controller action');
     },
   };
+  return tool;
 }
