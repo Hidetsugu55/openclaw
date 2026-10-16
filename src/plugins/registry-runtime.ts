@@ -1,3 +1,4 @@
+import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
@@ -16,7 +17,12 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
-import { createReadiness1HostBinding, type Readiness1HostBinding } from "./readiness1-host-binding.js";
+import {
+  createReadiness1HostBinding,
+  createReadiness1SourceRunBindingV2,
+  type Readiness1HostBinding,
+  type Readiness1SourceRunBindingV2,
+} from "./readiness1-host-binding.js";
 import {
   capturePluginLifecycleAuthority,
   getPluginRecordRegistry,
@@ -195,6 +201,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
     };
     let readiness1HostBinding: Readiness1HostBinding | null | undefined;
+    let readiness1SourceRunBindingV2: Readiness1SourceRunBindingV2 | null | undefined;
     const resolveReadiness1HostBinding = (): Readiness1HostBinding | undefined => {
       if (readiness1HostBinding !== undefined) {
         return readiness1HostBinding ?? undefined;
@@ -231,6 +238,46 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       readiness1HostBinding = binding ?? null;
       return binding;
     };
+    const resolveReadiness1SourceRunBindingV2 = (): Readiness1SourceRunBindingV2 | undefined => {
+      if (readiness1SourceRunBindingV2 !== undefined) {
+        return readiness1SourceRunBindingV2 ?? undefined;
+      }
+      const binding = createReadiness1SourceRunBindingV2({
+        record,
+        assertCurrent: assertRuntimeCurrent,
+        openCanonicalTaskStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-canonical-tasks",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+        runWithExecutionControl: (params, control) =>
+          runtime.subagent.runWithExecutionControl(params, control),
+        workspace: {
+          config: runtime.config,
+          sandbox: runtime.sandbox,
+          worktrees: runtime.worktrees,
+        },
+        acquireSourceRunLease: async (worktreeId) => {
+          const lease = await acquireWorktreeRunLease(worktreeId, { exclusive: true });
+          return Object.freeze({ release: () => lease.releaseWithReceipt() });
+        },
+        openLedgerStore: () =>
+          createPluginStateKeyedStore<unknown>(
+            pluginId,
+            {
+              namespace: "readiness1-controller-ledger",
+              retention: "retained",
+            },
+            assertRuntimeCurrent,
+          ),
+      });
+      readiness1SourceRunBindingV2 = binding ?? null;
+      return binding;
+    };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
     const loadSessionOwnership = createLazyRuntimeSurface(
       () => import("./registry-runtime-session-ownership.js"),
@@ -264,6 +311,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         };
         if (prop === "readiness1HostBinding") {
           return resolveReadiness1HostBinding();
+        }
+        if (prop === "readiness1SourceRunBindingV2") {
+          return resolveReadiness1SourceRunBindingV2();
         }
         if (prop === "state") {
           const baseState = getRuntimeProperty();

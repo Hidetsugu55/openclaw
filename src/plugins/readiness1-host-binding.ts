@@ -5,13 +5,11 @@ import type {
 } from "../agents/command/types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRecord } from "./registry-types.js";
-import type {
-  PluginRuntime,
-  PluginSubagentExecutionResult,
-} from "./runtime/types.js";
+import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
 
 const READINESS1_PLUGIN_ID = "readiness1-native-controller";
 const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
+const READINESS1_SOURCE_RUN_BINDING_V2_KIND = "openclaw.readiness1.source-run-binding.v2";
 const TASK_NODE_ID = /^[A-Za-z0-9_:-]{3,512}$/;
 const TICKET_ID = /^[A-Za-z0-9:_-]{8,160}$/;
 const READ_ONLY_ACTION_CLASSES = new Set(["read", "diagnostic"]);
@@ -43,6 +41,49 @@ export type Readiness1WorkspacePrepareResult = Readonly<{
   confinementError?: string;
 }>;
 
+export type Readiness1SourceRunPrepareRequest = Readonly<{
+  taskNodeId: string;
+  claimId: string;
+}>;
+
+/**
+ * The host derives these values from one retained Task and one managed worktree.
+ * They are delivered only to a host callback, never serialized into controller
+ * state, tool input, or plugin configuration.
+ */
+export type Readiness1SourceRunContext = Readonly<{
+  agentId: string;
+  provider: "claude-code" | "codex";
+  sessionKey: string;
+  sessionRoot: string;
+  workspaceDir: string;
+  cwd: string;
+  sandboxed: true;
+  workspaceAccess: "rw";
+  requiredToolNames: readonly ["read", "exec", "apply_patch"];
+}>;
+
+/** An opaque, exclusive managed-worktree lease; no registry ID or token is exposed. */
+export type Readiness1SourceRunLease = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V2_KIND;
+  withContext: <T>(run: (context: Readiness1SourceRunContext) => Promise<T> | T) => Promise<T>;
+  /** Rejects if either the run lease or its managed-worktree reference is uncertain. */
+  release: () => Promise<void>;
+}>;
+
+export type Readiness1SourceRunBindingV2 = Readonly<{
+  kind: typeof READINESS1_SOURCE_RUN_BINDING_V2_KIND;
+  /**
+   * Builds a host-owned, exclusive pre-spawn binding only. This contract never
+   * calls a provider or a public Gateway dispatch route.
+   */
+  prepare: (request: Readiness1SourceRunPrepareRequest) => Promise<Readiness1SourceRunLease>;
+}>;
+
+type Readiness1SourceRunLeaseGuard = Readonly<{
+  release: () => Promise<boolean>;
+}>;
+
 type CanonicalReadOnlyTask = Readonly<{
   provider: "claude-code" | "codex";
   instructions: string;
@@ -63,26 +104,28 @@ type CanonicalSourceTask = Readonly<{
 }>;
 
 function canonicalReadOnlyTask(taskNodeId: string, value: unknown): CanonicalReadOnlyTask {
-  const descriptor = value as {
-    contract?: {
-      actionClass?: unknown;
-      caps?: { provider?: unknown };
-      role?: unknown;
-      taskNodeId?: unknown;
-    };
-    instructions?: unknown;
-  } | undefined;
+  const descriptor = value as
+    | {
+        contract?: {
+          actionClass?: unknown;
+          caps?: { provider?: unknown };
+          role?: unknown;
+          taskNodeId?: unknown;
+        };
+        instructions?: unknown;
+      }
+    | undefined;
   const contract = descriptor?.contract;
   const provider = contract?.caps?.provider;
   if (
-    contract?.taskNodeId !== taskNodeId
-    || typeof contract.role !== "string"
-    || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(contract.role)
-    || !READ_ONLY_ACTION_CLASSES.has(String(contract.actionClass))
-    || (provider !== "claude-code" && provider !== "codex")
-    || typeof descriptor?.instructions !== "string"
-    || descriptor.instructions.trim().length === 0
-    || descriptor.instructions.length > 64 * 1024
+    contract?.taskNodeId !== taskNodeId ||
+    typeof contract.role !== "string" ||
+    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(contract.role) ||
+    !READ_ONLY_ACTION_CLASSES.has(String(contract.actionClass)) ||
+    (provider !== "claude-code" && provider !== "codex") ||
+    typeof descriptor?.instructions !== "string" ||
+    descriptor.instructions.trim().length === 0 ||
+    descriptor.instructions.length > 64 * 1024
   ) {
     throw new Error("Readiness #1 canonical read-only Task is invalid.");
   }
@@ -95,41 +138,43 @@ function canonicalReadOnlyTask(taskNodeId: string, value: unknown): CanonicalRea
 }
 
 function canonicalSourceTask(taskNodeId: string, value: unknown): CanonicalSourceTask {
-  const descriptor = value as {
-    contract?: {
-      actionClass?: unknown;
-      caps?: { provider?: unknown };
-      head?: unknown;
-      ref?: unknown;
-      role?: unknown;
-      root?: unknown;
-      taskNodeId?: unknown;
-    };
-    indexDigest?: unknown;
-    sourceRoot?: unknown;
-    worktreeBranch?: unknown;
-    worktreeName?: unknown;
-  } | undefined;
+  const descriptor = value as
+    | {
+        contract?: {
+          actionClass?: unknown;
+          caps?: { provider?: unknown };
+          head?: unknown;
+          ref?: unknown;
+          role?: unknown;
+          root?: unknown;
+          taskNodeId?: unknown;
+        };
+        indexDigest?: unknown;
+        sourceRoot?: unknown;
+        worktreeBranch?: unknown;
+        worktreeName?: unknown;
+      }
+    | undefined;
   const contract = descriptor?.contract;
   const provider = contract?.caps?.provider;
   if (
-    contract?.taskNodeId !== taskNodeId
-    || typeof contract.role !== "string"
-    || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(contract.role)
-    || !SOURCE_ACTION_CLASSES.has(String(contract.actionClass))
-    || (provider !== "claude-code" && provider !== "codex")
-    || typeof contract.ref !== "string"
-    || !contract.ref.startsWith("refs/heads/")
-    || typeof contract.head !== "string"
-    || !SHA1.test(contract.head)
-    || !isAbsoluteCanonicalPath(contract.root)
-    || !isAbsoluteCanonicalPath(descriptor?.sourceRoot)
-    || typeof descriptor.worktreeName !== "string"
-    || !WORKTREE_NAME.test(descriptor.worktreeName)
-    || typeof descriptor.worktreeBranch !== "string"
-    || !WORKTREE_BRANCH.test(descriptor.worktreeBranch)
-    || descriptor.worktreeBranch !== `openclaw/${descriptor.worktreeName}`
-    || !SHA256.test(String(descriptor.indexDigest))
+    contract?.taskNodeId !== taskNodeId ||
+    typeof contract.role !== "string" ||
+    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(contract.role) ||
+    !SOURCE_ACTION_CLASSES.has(String(contract.actionClass)) ||
+    (provider !== "claude-code" && provider !== "codex") ||
+    typeof contract.ref !== "string" ||
+    !contract.ref.startsWith("refs/heads/") ||
+    typeof contract.head !== "string" ||
+    !SHA1.test(contract.head) ||
+    !isAbsoluteCanonicalPath(contract.root) ||
+    !isAbsoluteCanonicalPath(descriptor?.sourceRoot) ||
+    typeof descriptor.worktreeName !== "string" ||
+    !WORKTREE_NAME.test(descriptor.worktreeName) ||
+    typeof descriptor.worktreeBranch !== "string" ||
+    !WORKTREE_BRANCH.test(descriptor.worktreeBranch) ||
+    descriptor.worktreeBranch !== `openclaw/${descriptor.worktreeName}` ||
+    !SHA256.test(String(descriptor.indexDigest))
   ) {
     throw new Error("Readiness #1 canonical source Task is invalid.");
   }
@@ -148,23 +193,28 @@ function canonicalSourceTask(taskNodeId: string, value: unknown): CanonicalSourc
 
 function isAbsoluteCanonicalPath(value: unknown): value is string {
   return (
-    typeof value === "string"
-    && value.startsWith("/")
-    && !value.split("/").some((part) => part === "." || part === "..")
+    typeof value === "string" &&
+    value.startsWith("/") &&
+    !value.split("/").some((part) => part === "." || part === "..")
   );
 }
 
-function readiness1WorkerSessionKey(task: Pick<CanonicalReadOnlyTask, "taskNodeId" | "role">): string {
+function readiness1WorkerSessionKey(
+  task: Pick<CanonicalReadOnlyTask, "taskNodeId" | "role">,
+): string {
   const suffix = createHash("sha256").update(task.taskNodeId).digest("hex").slice(0, 24);
   return `agent:${task.role}:subagent:workboard-readiness1-${suffix}`;
 }
 
-function requireExpectedIdentity(identity: AgentRuntimeExecutionIdentity, sessionKey: string): void {
+function requireExpectedIdentity(
+  identity: AgentRuntimeExecutionIdentity,
+  sessionKey: string,
+): void {
   if (
-    identity.sessionKey !== sessionKey
-    || identity.resourceOwnership.run !== "gateway"
-    || identity.resourceOwnership.session !== "gateway"
-    || identity.resourceOwnership.cleanup !== "gateway"
+    identity.sessionKey !== sessionKey ||
+    identity.resourceOwnership.run !== "gateway" ||
+    identity.resourceOwnership.session !== "gateway" ||
+    identity.resourceOwnership.cleanup !== "gateway"
   ) {
     throw new Error("Readiness #1 native execution identity drift.");
   }
@@ -233,11 +283,11 @@ export function createReadiness1HostBinding(params: {
     },
     runCanonicalReadOnly: async (request) => {
       if (
-        !request
-        || !TASK_NODE_ID.test(request.taskNodeId)
-        || !TICKET_ID.test(request.ticketId)
-        || typeof request.beforeProvider !== "function"
-        || (request.onObservation !== undefined && typeof request.onObservation !== "function")
+        !request ||
+        !TASK_NODE_ID.test(request.taskNodeId) ||
+        !TICKET_ID.test(request.ticketId) ||
+        typeof request.beforeProvider !== "function" ||
+        (request.onObservation !== undefined && typeof request.onObservation !== "function")
       ) {
         throw new Error("Readiness #1 read-only run request is invalid.");
       }
@@ -283,11 +333,7 @@ export function createReadiness1HostBinding(params: {
       return accepted;
     },
     prepareCanonicalWorkspace: async (request) => {
-      if (
-        !request
-        || !TASK_NODE_ID.test(request.taskNodeId)
-        || !TICKET_ID.test(request.claimId)
-      ) {
+      if (!request || !TASK_NODE_ID.test(request.taskNodeId) || !TICKET_ID.test(request.claimId)) {
         throw new Error("Readiness #1 workspace request is invalid.");
       }
       const workspaceRuntime = params.workspace;
@@ -324,9 +370,9 @@ export function createReadiness1HostBinding(params: {
         });
         params.assertCurrent();
         if (
-          created.path !== task.root
-          || resolvedWorkspaceRoot !== created.path
-          || created.branch !== task.worktreeBranch
+          created.path !== task.root ||
+          resolvedWorkspaceRoot !== created.path ||
+          created.branch !== task.worktreeBranch
         ) {
           throw new Error("Readiness #1 managed worktree identity mismatch.");
         }
@@ -343,9 +389,9 @@ export function createReadiness1HostBinding(params: {
         });
         params.assertCurrent();
         if (
-          authority.sandboxed !== true
-          || authority.workspaceAccess !== "rw"
-          || authority.confinementError
+          authority.sandboxed !== true ||
+          authority.workspaceAccess !== "rw" ||
+          authority.confinementError
         ) {
           throw new Error("Readiness #1 required worker sandbox is unavailable.");
         }
@@ -381,4 +427,113 @@ export function createReadiness1HostBinding(params: {
   });
 }
 
-export { READINESS1_HOST_BINDING_KIND, READINESS1_PLUGIN_ID };
+/**
+ * A separate v2 contract so the v1 binding's exact key set remains stable.
+ * It owns the worktree run lease until a later, separately reviewed host launch
+ * path consumes it. No extension currently receives or calls this binding.
+ */
+export function createReadiness1SourceRunBindingV2(params: {
+  record: Pick<PluginRecord, "id" | "origin">;
+  assertCurrent: () => void;
+  openLedgerStore: () => PluginStateKeyedStore<unknown>;
+  openCanonicalTaskStore: () => PluginStateKeyedStore<unknown>;
+  runWithExecutionControl: PluginRuntime["subagent"]["runWithExecutionControl"];
+  workspace?: Pick<PluginRuntime, "sandbox" | "worktrees" | "config">;
+  /** Injected by the host resolver; intentionally absent from PluginRuntime. */
+  acquireSourceRunLease?: (worktreeId: string) => Promise<Readiness1SourceRunLeaseGuard>;
+}): Readiness1SourceRunBindingV2 | undefined {
+  const v1 = createReadiness1HostBinding(params);
+  const workspaceRuntime = params.workspace;
+  const acquireSourceRunLease = params.acquireSourceRunLease;
+  if (!v1 || !workspaceRuntime || !acquireSourceRunLease) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: READINESS1_SOURCE_RUN_BINDING_V2_KIND,
+    prepare: async (request) => {
+      if (!request || !TASK_NODE_ID.test(request.taskNodeId) || !TICKET_ID.test(request.claimId)) {
+        throw new Error("Readiness #1 source run request is invalid.");
+      }
+      params.assertCurrent();
+      const task = canonicalSourceTask(
+        request.taskNodeId,
+        await params.openCanonicalTaskStore().lookup(request.taskNodeId),
+      );
+      const prepared = await v1.prepareCanonicalWorkspace(request);
+      let runLease: Readiness1SourceRunLeaseGuard | undefined;
+      try {
+        params.assertCurrent();
+        runLease = await acquireSourceRunLease(prepared.id);
+        params.assertCurrent();
+      } catch (error) {
+        try {
+          if (runLease) {
+            const released = await runLease.release();
+            if (!released) {
+              throw new Error("Readiness #1 source run lease cleanup was not confirmed.");
+            }
+          }
+          await workspaceRuntime.worktrees.release({ path: prepared.path });
+          const removed = await workspaceRuntime.worktrees.removeIfLossless({
+            path: prepared.path,
+            ownerKind: "workboard",
+            ownerId: `readiness1:${task.taskNodeId}:${request.claimId}`,
+          });
+          if (!removed) {
+            throw new Error("Readiness #1 source run cleanup was not confirmed.");
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Readiness #1 source run preparation failed with uncertain cleanup.",
+          );
+        }
+        throw error;
+      }
+      if (!runLease) {
+        throw new Error("Readiness #1 source run lease is UNKNOWN.");
+      }
+      const heldRunLease = runLease;
+      const context: Readiness1SourceRunContext = Object.freeze({
+        agentId: task.role,
+        provider: task.provider,
+        sessionKey: readiness1WorkerSessionKey(task),
+        sessionRoot: prepared.path,
+        workspaceDir: prepared.path,
+        cwd: prepared.path,
+        sandboxed: true,
+        workspaceAccess: "rw",
+        requiredToolNames: REQUIRED_SOURCE_TOOLS,
+      });
+      let released = false;
+      let release: Promise<void> | undefined;
+      return Object.freeze({
+        kind: READINESS1_SOURCE_RUN_BINDING_V2_KIND,
+        withContext: async (run) => {
+          if (released || typeof run !== "function") {
+            throw new Error("Readiness #1 source run lease is unavailable.");
+          }
+          params.assertCurrent();
+          const result = await run(context);
+          params.assertCurrent();
+          return result;
+        },
+        release: () =>
+          (release ??= (async () => {
+            const confirmed = await heldRunLease.release();
+            if (!confirmed) {
+              throw new Error("Readiness #1 source run lease release is UNKNOWN.");
+            }
+            await workspaceRuntime.worktrees.release({ path: prepared.path });
+            released = true;
+          })()),
+      });
+    },
+  });
+}
+
+export {
+  READINESS1_HOST_BINDING_KIND,
+  READINESS1_PLUGIN_ID,
+  READINESS1_SOURCE_RUN_BINDING_V2_KIND,
+};

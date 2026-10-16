@@ -7,7 +7,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import {
   createReadiness1HostBinding,
+  createReadiness1SourceRunBindingV2,
   READINESS1_HOST_BINDING_KIND,
+  READINESS1_SOURCE_RUN_BINDING_V2_KIND,
 } from "./readiness1-host-binding.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -98,10 +100,18 @@ describe("createReadiness1HostBinding", () => {
           sessionKey: params.sessionKey,
           sessionId: "native-read-session",
           lifecycleGeneration: "generation-1",
-          resourceOwnership: Object.freeze({ run: "gateway", session: "gateway", cleanup: "gateway" }),
+          resourceOwnership: Object.freeze({
+            run: "gateway",
+            session: "gateway",
+            cleanup: "gateway",
+          }),
         });
         await control.beforeProvider(identity);
-        return Object.freeze({ runId: identity.runId, sessionKey: identity.sessionKey, execution: identity });
+        return Object.freeze({
+          runId: identity.runId,
+          sessionKey: identity.sessionKey,
+          execution: identity,
+        });
       },
     );
     const binding = createReadiness1HostBinding({
@@ -123,7 +133,9 @@ describe("createReadiness1HostBinding", () => {
     expect(beforeProvider).toHaveBeenCalledTimes(1);
     expect(runWithExecutionControl).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: expect.stringMatching(/^agent:researcher:subagent:workboard-readiness1-[a-f0-9]{24}$/),
+        sessionKey: expect.stringMatching(
+          /^agent:researcher:subagent:workboard-readiness1-[a-f0-9]{24}$/,
+        ),
         message: descriptor.instructions,
         provider: "codex",
         disableTools: true,
@@ -140,12 +152,19 @@ describe("createReadiness1HostBinding", () => {
       assertCurrent,
       openLedgerStore: vi.fn() as never,
       openCanonicalTaskStore: vi.fn(() => ({
-        lookup: vi.fn(async () => ({ ...descriptor, contract: { ...descriptor.contract, actionClass: "source" } })),
+        lookup: vi.fn(async () => ({
+          ...descriptor,
+          contract: { ...descriptor.contract, actionClass: "source" },
+        })),
       })) as never,
       runWithExecutionControl,
     });
     await expect(
-      sourceBinding?.runCanonicalReadOnly({ taskNodeId, ticketId: "ticket-source-123", beforeProvider }),
+      sourceBinding?.runCanonicalReadOnly({
+        taskNodeId,
+        ticketId: "ticket-source-123",
+        beforeProvider,
+      }),
     ).rejects.toThrow("canonical read-only Task is invalid");
     expect(runWithExecutionControl).toHaveBeenCalledTimes(1);
   });
@@ -204,22 +223,155 @@ describe("createReadiness1HostBinding", () => {
       sandboxed: true,
       workspaceAccess: "rw",
     });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      repoRoot: descriptor.sourceRoot,
-      name: descriptor.worktreeName,
-      baseRef: descriptor.contract.head,
-      ownerKind: "workboard",
-      ownerId: `readiness1:${taskNodeId}:${claimId}`,
-      commitGuard: assertCurrent,
-    }));
-    expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: descriptor.contract.role,
-      workspaceDir: descriptor.contract.root,
-      requiredToolNames: ["read", "exec", "apply_patch"],
-      modelProvider: "codex",
-    }));
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: descriptor.sourceRoot,
+        name: descriptor.worktreeName,
+        baseRef: descriptor.contract.head,
+        ownerKind: "workboard",
+        ownerId: `readiness1:${taskNodeId}:${claimId}`,
+        commitGuard: assertCurrent,
+      }),
+    );
+    expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: descriptor.contract.role,
+        workspaceDir: descriptor.contract.root,
+        requiredToolNames: ["read", "exec", "apply_patch"],
+        modelProvider: "codex",
+      }),
+    );
     expect(release).not.toHaveBeenCalled();
     expect(removeIfLossless).not.toHaveBeenCalled();
+  });
+
+  it("creates an opaque v2 source-run lease with one fixed workspace identity", async () => {
+    const taskNodeId = "TASK_source_v2_123";
+    const claimId = "ticket-source-v2-123";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v2",
+      },
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v2-123",
+      worktreeBranch: "openclaw/readiness1-task-source-v2-123",
+    };
+    const releaseRunLease = vi.fn(async () => true);
+    const releaseWorkspace = vi.fn(async () => {});
+    const acquireRunLease = vi.fn(async () => ({ release: releaseRunLease }));
+    const binding = createReadiness1SourceRunBindingV2({
+      acquireSourceRunLease: acquireRunLease,
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl: vi.fn() as never,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v2",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: releaseWorkspace,
+          removeIfLossless: vi.fn(async () => true),
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run binding was not created");
+
+    expect(binding.kind).toBe(READINESS1_SOURCE_RUN_BINDING_V2_KIND);
+    const lease = await binding.prepare({ taskNodeId, claimId });
+    expect(Object.keys(lease)).toEqual(["kind", "withContext", "release"]);
+    await expect(
+      lease.withContext((context) => {
+        expect(context.sessionRoot).toBe(descriptor.contract.root);
+        expect(context.workspaceDir).toBe(context.sessionRoot);
+        expect(context.cwd).toBe(context.sessionRoot);
+        expect(context.agentId).toBe(descriptor.contract.role);
+        expect(context.provider).toBe("codex");
+        expect(context.sandboxed).toBe(true);
+        expect(context.workspaceAccess).toBe("rw");
+        expect(context.requiredToolNames).toEqual(["read", "exec", "apply_patch"]);
+        return "bound";
+      }),
+    ).resolves.toBe("bound");
+    expect(acquireRunLease).toHaveBeenCalledWith("wt-v2");
+    await expect(lease.release()).resolves.toBeUndefined();
+    expect(releaseRunLease).toHaveBeenCalledTimes(1);
+    expect(releaseWorkspace).toHaveBeenCalledWith({ path: descriptor.contract.root });
+    await expect(lease.withContext(async () => "later")).rejects.toThrow("lease is unavailable");
+  });
+
+  it("does not treat an uncertain v2 run-lease release as success", async () => {
+    const taskNodeId = "TASK_source_v2_unknown";
+    const descriptor = {
+      contract: {
+        taskNodeId,
+        role: "dev-host",
+        actionClass: "source",
+        caps: { provider: "codex" },
+        ref: "refs/heads/main",
+        head: "a".repeat(40),
+        root: "/state/worktrees/wt-v2-unknown",
+      },
+      indexDigest: "b".repeat(64),
+      sourceRoot: "/repo",
+      worktreeName: "readiness1-task-source-v2-unknown",
+      worktreeBranch: "openclaw/readiness1-task-source-v2-unknown",
+    };
+    const releaseWorkspace = vi.fn(async () => {});
+    const binding = createReadiness1SourceRunBindingV2({
+      acquireSourceRunLease: vi.fn(async () => ({ release: vi.fn(async () => false) })),
+      record: { id: "readiness1-native-controller", origin: "bundled" },
+      assertCurrent: vi.fn(),
+      openLedgerStore: vi.fn() as never,
+      openCanonicalTaskStore: vi.fn(() => ({ lookup: vi.fn(async () => descriptor) })) as never,
+      runWithExecutionControl: vi.fn() as never,
+      workspace: {
+        config: { current: vi.fn(() => ({})) } as never,
+        worktrees: {
+          resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
+            path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
+          ),
+          create: vi.fn(async () => ({
+            id: "wt-v2-unknown",
+            path: descriptor.contract.root,
+            branch: descriptor.worktreeBranch,
+          })),
+          release: releaseWorkspace,
+          removeIfLossless: vi.fn(async () => true),
+        } as never,
+        sandbox: {
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true as const,
+            workspaceAccess: "rw" as const,
+          })),
+        } as never,
+      },
+    });
+    if (!binding) throw new Error("Readiness #1 source run binding was not created");
+
+    const lease = await binding.prepare({ taskNodeId, claimId: "ticket-source-v2-unknown" });
+    await expect(lease.release()).rejects.toThrow("lease release is UNKNOWN");
+    expect(releaseWorkspace).not.toHaveBeenCalled();
   });
 
   it("removes a mismatched host worktree and refuses the source Task", async () => {
@@ -254,7 +406,11 @@ describe("createReadiness1HostBinding", () => {
           resolveCheckoutRoot: vi.fn(async ({ path }: { path: string }) =>
             path === descriptor.contract.root ? descriptor.contract.root : descriptor.sourceRoot,
           ),
-          create: vi.fn(async () => ({ id: "wt-2", path: "/wrong", branch: descriptor.worktreeBranch })),
+          create: vi.fn(async () => ({
+            id: "wt-2",
+            path: "/wrong",
+            branch: descriptor.worktreeBranch,
+          })),
           release,
           removeIfLossless,
         } as never,
@@ -275,7 +431,11 @@ describe("createReadiness1HostBinding", () => {
   });
 
   it("injects the binding only for the exact bundled controller runtime", () => {
-    const resolveBinding = (id: string, origin: "bundled" | "global") => {
+    const resolveBinding = (
+      id: string,
+      origin: "bundled" | "global",
+      property: "readiness1HostBinding" | "readiness1SourceRunBindingV2" = "readiness1HostBinding",
+    ) => {
       const builder = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
         id,
@@ -285,13 +445,24 @@ describe("createReadiness1HostBinding", () => {
         configSchema: false,
       });
       const api = builder.createApi(record, { config: {} });
-      return (api.runtime as unknown as { readiness1HostBinding?: unknown }).readiness1HostBinding;
+      return (api.runtime as unknown as Record<string, unknown>)[property];
     };
 
     const binding = resolveBinding("readiness1-native-controller", "bundled");
     expect(binding).toMatchObject({ kind: READINESS1_HOST_BINDING_KIND });
+    expect(Object.keys(binding as object).sort()).toEqual([
+      "kind",
+      "openLedgerStore",
+      "prepareCanonicalWorkspace",
+      "readCanonicalDescriptor",
+      "runCanonicalReadOnly",
+    ]);
+    expect(
+      resolveBinding("readiness1-native-controller", "bundled", "readiness1SourceRunBindingV2"),
+    ).toMatchObject({ kind: READINESS1_SOURCE_RUN_BINDING_V2_KIND });
     expect(resolveBinding("readiness1-native-controller", "global")).toBeUndefined();
     expect(resolveBinding("other", "bundled")).toBeUndefined();
+    expect(resolveBinding("other", "bundled", "readiness1SourceRunBindingV2")).toBeUndefined();
   });
 
   it("opens the real retained ledger and rejects a retired runtime", async () => {
@@ -306,9 +477,11 @@ describe("createReadiness1HostBinding", () => {
           configSchema: false,
         });
         const api = builder.createApi(record, { config: {} });
-        const binding = (api.runtime as unknown as {
-          readiness1HostBinding?: ReturnType<typeof createReadiness1HostBinding>;
-        }).readiness1HostBinding;
+        const binding = (
+          api.runtime as unknown as {
+            readiness1HostBinding?: ReturnType<typeof createReadiness1HostBinding>;
+          }
+        ).readiness1HostBinding;
         expect(binding).toBeDefined();
         if (!binding) throw new Error("Readiness #1 host binding was not injected");
 
