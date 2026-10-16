@@ -1,12 +1,13 @@
+import { createHash } from "node:crypto";
 import type {
   AgentRuntimeExecutionEvent,
   AgentRuntimeExecutionIdentity,
 } from "../agents/command/types.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
+import type { Readiness1SourceRunFinalSnapshot } from "./readiness1-source-run-evidence.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { PluginRuntime, PluginSubagentExecutionResult } from "./runtime/types.js";
-import type { Readiness1SourceRunFinalSnapshot } from "./readiness1-source-run-evidence.js";
 
 const READINESS1_PLUGIN_ID = "readiness1-native-controller";
 const READINESS1_HOST_BINDING_KIND = "openclaw.readiness1.host-binding.v1";
@@ -147,7 +148,9 @@ export type Readiness1SourceRunFinalSnapshotLaunch = Readonly<{
 
 export type Readiness1SourceRunBindingV5 = Readonly<{
   kind: typeof READINESS1_SOURCE_RUN_BINDING_V5_KIND;
-  launch: (request: Readiness1SourceRunLaunchRequest) => Promise<Readiness1SourceRunFinalSnapshotLaunch>;
+  launch: (
+    request: Readiness1SourceRunLaunchRequest,
+  ) => Promise<Readiness1SourceRunFinalSnapshotLaunch>;
 }>;
 
 type Readiness1SourceRunLeaseGuard = Readonly<{

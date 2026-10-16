@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { runGit, runGitBytes } from "../agents/worktrees/git.js";
+import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
