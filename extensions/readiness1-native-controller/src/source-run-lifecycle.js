@@ -178,12 +178,13 @@ export function createSourceRunLifecycle({ sourceRunBinding, now = Date.now }) {
       });
     },
 
-    async cleanup({ taskNodeId, root, workspace }) {
+    async cleanup({ taskNodeId, root, workspace, admitWorkspaceCleanup }) {
       requireThat(
         typeof taskNodeId === "string" &&
           typeof root === "string" &&
           workspace?.path === root &&
-          typeof workspace.sessionKey === "string",
+          typeof workspace.sessionKey === "string" &&
+          typeof admitWorkspaceCleanup === "function",
         "source cleanup request is invalid",
       );
       const candidates = [...runs.values()].filter(
@@ -196,6 +197,7 @@ export function createSourceRunLifecycle({ sourceRunBinding, now = Date.now }) {
       requireThat(candidates.length === 1, "source cleanup custody is unavailable");
       const [entry] = candidates;
       if (!entry.cleanupReceipt) {
+        await admitWorkspaceCleanup();
         entry.cleanupReceipt = (async () => {
           const evidence = await entry.launched.readCleanupEvidence();
           requireCleanupEvidence(evidence, entry);

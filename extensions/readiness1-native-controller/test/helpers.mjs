@@ -124,9 +124,10 @@ export function makeTool(overrides = {}) {
   };
   const bridge = createNativeBridge({
     config,
-    prepareWorkspaceFixture: Object.hasOwn(overrides, 'prepareWorkspaceFixture') ? overrides.prepareWorkspaceFixture : async ({ sourceRoot, worktreeName, worktreeBranch, sessionKey, requiredToolNames }) => {
+    prepareWorkspaceFixture: Object.hasOwn(overrides, 'prepareWorkspaceFixture') ? overrides.prepareWorkspaceFixture : async ({ sourceRoot, worktreeName, worktreeBranch, sessionKey, requiredToolNames, admitWorkspaceCreate }) => {
       const resolved = await runtime.worktrees.resolveCheckoutRoot({ path: sourceRoot });
       if (resolved !== sourceRoot) throw new Error('fixed repository root identity mismatch');
+      await admitWorkspaceCreate();
       const created = await runtime.worktrees.create({ repoRoot: sourceRoot, name: worktreeName, baseRef: contract.ref });
       const authority = await runtime.sandbox.prepareWorkspaceAuthority({ agentId: config.workerAgentId, sessionKey, workspaceDir: created.path, confinedToolNames: [], requiredToolNames });
       return { ...created, branch: created.branch ?? worktreeBranch, ...authority };
@@ -151,7 +152,8 @@ export function makeTool(overrides = {}) {
         snapshot: { repo: contract.repo, worktree: contract.root, head: contract.head, dirty: '', indexDigest: 'c'.repeat(64) },
       };
     },
-    cleanupWorkspace: Object.hasOwn(overrides, 'cleanupWorkspace') ? overrides.cleanupWorkspace : async ({ taskNodeId, root }) => {
+    cleanupWorkspace: Object.hasOwn(overrides, 'cleanupWorkspace') ? overrides.cleanupWorkspace : async ({ taskNodeId, root, admitWorkspaceCleanup }) => {
+      await admitWorkspaceCleanup();
       calls.push(['worktree.remove', { taskNodeId, root }]);
       return { schema: 'readiness1.finish-receipt.v1', receiptId: 'finish-0001', taskNodeId, root, workspaceRemoved: true, releaseConfirmed: true, postRemovalLsofClear: true, auditConfirmed: true, observedAt: now() };
     },

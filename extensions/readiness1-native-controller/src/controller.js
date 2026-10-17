@@ -525,11 +525,37 @@ export function createReadinessTool({
           );
         }
         const ticketId = `readiness1:${digest(`${task.taskNodeId}:${record.epoch}:${record.revision}:${randomUUID()}`).slice(0, 32)}`;
+        let workspaceCreateAdmitted = false;
         let launchAttempted = false;
         try {
           bridge.preflightDispatch();
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => reserveWorkspace(state, { now: now(), claimId: ticketId }), assertCurrent);
-          const prepared = await bridge.prepareWorkspace(task, { claimId: ticketId, assertCurrent });
+          const prepared = await bridge.prepareWorkspace(task, {
+            claimId: ticketId,
+            assertCurrent,
+            admit: async () => {
+              requireThat(!workspaceCreateAdmitted, 'workspace-create admission replay');
+              record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
+                requireThat(
+                  !state.gate?.stopRequested
+                    && state.status === 'WORKSPACE_RESERVED'
+                    && state.ticket?.id === ticketId
+                    && state.ticket.activeId === ticketId
+                    && state.ticket.state === 'workspace_reserved'
+                    && !state.workspace
+                    && !state.writer
+                    && state.receipt.valid
+                    && now() < state.receipt.expiresAt
+                    && now() < state.contract.deadline
+                    && now() < state.contract.hardSunset,
+                  'workspace-create STOP/drift fence refused',
+                );
+                state.history.push({ kind: 'workspace_create_admitted', id: ticketId, at: now() });
+                return state;
+              }, assertCurrent);
+              workspaceCreateAdmitted = true;
+            },
+          });
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => confirmWorkspace(state, { claimId: ticketId, workspace: prepared.workspace, snapshot: prepared.snapshot, now: now() }), assertCurrent);
           const native = await bridge.nativeCapacityNoWork(task);
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
@@ -630,6 +656,9 @@ export function createReadinessTool({
           return json({ ok: true, task: safeRecord(record) });
         } catch (error) {
           const latest = await ledger.read(task.taskNodeId, assertCurrent);
+          if (!workspaceCreateAdmitted && latest?.state?.gate?.stopRequested === true) {
+            return reportContinuationStop(task, latest, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+          }
           const recoverableBindingDrift = error?.code === 'PRE_LAUNCH_BINDING_DRIFT'
             && launchAttempted === false
             && latest?.revision === record.revision
@@ -726,12 +755,41 @@ export function createReadinessTool({
             requireThat(decision.allowed, decision.reason); state.cleanup = decision.cleanup; return state;
           }, assertCurrent);
         }
+        let cleanupAdmitted = false;
         let cleanup;
         try {
-          cleanup = await bridge.cleanupWorkspace(task, record.state.workspace);
+          cleanup = await bridge.cleanupWorkspace(task, record.state.workspace, {
+            assertCurrent,
+            admit: async () => {
+              requireThat(!cleanupAdmitted, 'workspace-cleanup admission replay');
+              record = await ledger.mutate(task.taskNodeId, record.revision, (state) => {
+                requireThat(
+                  !state.gate?.stopRequested
+                    && state.status === 'ACTIVE'
+                    && state.cleanup === (cleanupDeferred ? 'pending' : 'pass')
+                    && state.workspace?.id === record.state.workspace.id
+                    && !state.writer
+                    && !state.ticket
+                    && state.reserved === 0
+                    && state.receipt.valid
+                    && now() < state.receipt.expiresAt
+                    && now() < state.contract.deadline
+                    && now() < state.contract.hardSunset,
+                  'workspace-cleanup STOP/drift fence refused',
+                );
+                state.history.push({ kind: 'workspace_cleanup_admitted', id: state.workspace.id, at: now() });
+                return state;
+              }, assertCurrent);
+              cleanupAdmitted = true;
+            },
+          });
           requireThat(cleanup?.schema === 'readiness1.finish-receipt.v1' && cleanup.taskNodeId === task.taskNodeId && cleanup.root === task.root, 'cleanup receipt identity mismatch');
           requireThat(cleanup.workspaceRemoved === true && cleanup.releaseConfirmed === true && cleanup.postRemovalLsofClear === true && cleanup.auditConfirmed === true, 'cleanup receipt incomplete');
         } catch {
+          const latest = await ledger.read(task.taskNodeId, assertCurrent);
+          if (!cleanupAdmitted && latest?.state?.gate?.stopRequested === true) {
+            return reportContinuationStop(task, latest, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+          }
           record = await ledger.mutate(task.taskNodeId, record.revision, (state) => { state.status = 'OUTCOME_UNKNOWN'; state.cleanup = 'pending'; state.history.push({ kind: 'cleanup_outcome_unknown', at: now() }); return state; }, assertCurrent);
           return json({ ok: false, reason: 'CLEANUP_OUTCOME_UNKNOWN', task: safeRecord(record) });
         }

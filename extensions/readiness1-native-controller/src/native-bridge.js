@@ -64,12 +64,31 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
       requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
     },
 
-    async prepareWorkspace(task, { claimId, assertCurrent }) {
+    async prepareWorkspace(task, { claimId, assertCurrent, admit }) {
       const fixed = await descriptor(task.taskNodeId);
       assertCurrent();
       const sessionKey = nativeWorkerSessionKey(config.workerAgentId, task.taskNodeId);
       requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
-      const prepared = await prepareWorkspaceFixture(Object.freeze({ fixtureOnly: true, task: structuredClone(task), sourceRoot: fixed.sourceRoot, worktreeName: fixed.worktreeName, worktreeBranch: fixed.worktreeBranch, workerAgentId: config.workerAgentId, sessionKey, claimId, requiredToolNames: Object.freeze(['read', 'exec', 'apply_patch']) }));
+      requireThat(typeof admit === 'function', 'WORKSPACE_CREATE_ADMISSION_UNAVAILABLE');
+      let admitted = false;
+      const prepared = await prepareWorkspaceFixture(Object.freeze({
+        fixtureOnly: true,
+        task: structuredClone(task),
+        sourceRoot: fixed.sourceRoot,
+        worktreeName: fixed.worktreeName,
+        worktreeBranch: fixed.worktreeBranch,
+        workerAgentId: config.workerAgentId,
+        sessionKey,
+        claimId,
+        requiredToolNames: Object.freeze(['read', 'exec', 'apply_patch']),
+        async admitWorkspaceCreate() {
+          requireThat(!admitted, 'workspace-create admission replay');
+          assertCurrent();
+          await admit();
+          admitted = true;
+        },
+      }));
+      requireThat(admitted, 'workspace creation attempted without lifecycle admission');
       const workspace = { id: prepared.id, path: prepared.path, branch: prepared.branch, agentId: config.workerAgentId, sessionKey, claimId };
       requireThat(workspace.path === task.root && workspace.branch === fixed.worktreeBranch, 'managed worktree identity mismatch');
       requireThat(prepared.sandboxed === true && prepared.workspaceAccess === 'rw' && !prepared.confinementError, 'required native worker sandbox unavailable');
@@ -110,11 +129,30 @@ export function createNativeBridge({ config, readCanonicalDescriptor: readHostCa
       return observeNativeRun(Object.freeze({ ...binding }));
     },
 
-    async cleanupWorkspace(task, workspace) {
+    async cleanupWorkspace(task, workspace, options = {}) {
       requireThat(workspace.path === task.root, 'cleanup worktree mismatch');
-      if (sourceRunLifecycle) return sourceRunLifecycle.cleanup(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace) }));
+      const admissionRequired = typeof options.admit === 'function';
+      let admitted = false;
+      const admitWorkspaceCleanup = async () => {
+        requireThat(!admitted, 'workspace-cleanup admission replay');
+        options.assertCurrent?.();
+        if (admissionRequired) await options.admit();
+        admitted = true;
+      };
+      if (sourceRunLifecycle) {
+        const receipt = await sourceRunLifecycle.cleanup(Object.freeze({
+          taskNodeId: task.taskNodeId,
+          root: task.root,
+          workspace: structuredClone(workspace),
+          admitWorkspaceCleanup,
+        }));
+        requireThat(!admissionRequired || admitted, 'workspace cleanup attempted without lifecycle admission');
+        return receipt;
+      }
       requireThat(typeof cleanupWorkspace === 'function', 'LOSSLESS_CLEANUP_PUBLIC_SURFACE_UNAVAILABLE');
-      return cleanupWorkspace(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace) }));
+      const receipt = await cleanupWorkspace(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace), admitWorkspaceCleanup }));
+      requireThat(!admissionRequired || admitted, 'workspace cleanup attempted without lifecycle admission');
+      return receipt;
     },
 
     async sendFixedOwnerDM(payload) {

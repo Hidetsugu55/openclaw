@@ -538,6 +538,114 @@ test('G19 G27 cancel after reservation wins the admission CAS and holds unresolv
   assert.ok(held.state.ticket);
 });
 
+test('gate.cancel between dispatch entry and workspace preparation wins the create admission CAS', async () => {
+  const reports = [];
+  let fixture;
+  let workspaceCreates = 0;
+  fixture = gateHarness({
+    async prepareWorkspaceFixture(request) {
+      const reserved = await fixture.ledger.read(contract.taskNodeId, () => {});
+      assert.equal(reserved.state.status, 'WORKSPACE_RESERVED');
+      await fixture.tool.execute('cancel-before-workspace-create', {
+        action: 'gate.cancel',
+        taskNodeId: contract.taskNodeId,
+        expectedRevision: reserved.revision,
+      });
+      await request.admitWorkspaceCreate();
+      workspaceCreates += 1;
+      return { id: 'forbidden-workspace', path: contract.root, branch: 'codex/task-node-123', sandboxed: true, workspaceAccess: 'rw' };
+    },
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  const active = await activateGate(fixture.tool);
+
+  const stopped = (await fixture.tool.execute('dispatch-create-race', {
+    action: 'dispatch',
+    taskNodeId: contract.taskNodeId,
+    expectedRevision: active.revision,
+    candidateId: 'source',
+  })).details;
+
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'STOP_REQUESTED');
+  assert.deepEqual(stopped.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(stopped.task.status, 'WORKSPACE_RESERVED');
+  assert.equal(stopped.task.workspace, null);
+  assert.equal(workspaceCreates, 0);
+  assert.equal(fixture.calls.some(([name]) => name === 'provider.work' || name === 'worktree.create'), false);
+  const held = await fixture.ledger.read(contract.taskNodeId, () => {});
+  assert.equal(held.state.gate.stopRequested, true);
+  assert.equal(held.state.history.some((entry) => entry.kind === 'workspace_create_admitted'), false);
+
+  const repeated = (await fixture.tool.execute('dispatch-create-race-readback', {
+    action: 'dispatch',
+    taskNodeId: contract.taskNodeId,
+    expectedRevision: stopped.task.revision,
+    candidateId: 'source',
+  })).details;
+  assert.equal(repeated.reason, 'STOP_REQUESTED');
+  assert.deepEqual(repeated.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(workspaceCreates, 0);
+  assert.equal(reports.length, 1);
+});
+
+test('gate.cancel between cleanup decision and cleanupWorkspace wins the delete admission CAS', async () => {
+  const reports = [];
+  let fixture;
+  let workspaceDeletes = 0;
+  fixture = gateHarness({
+    async cleanupWorkspace(request) {
+      const decided = await fixture.ledger.read(contract.taskNodeId, () => {});
+      assert.equal(decided.state.status, 'ACTIVE');
+      assert.equal(decided.state.cleanup, 'pass');
+      await fixture.tool.execute('cancel-before-workspace-cleanup', {
+        action: 'gate.cancel',
+        taskNodeId: contract.taskNodeId,
+        expectedRevision: decided.revision,
+      });
+      await request.admitWorkspaceCleanup();
+      workspaceDeletes += 1;
+      return {
+        schema: 'readiness1.finish-receipt.v1', receiptId: 'forbidden-cleanup',
+        taskNodeId: request.taskNodeId, root: request.root, workspaceRemoved: true,
+        releaseConfirmed: true, postRemovalLsofClear: true, auditConfirmed: true, observedAt: 1_000,
+      };
+    },
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  let task = await activateGate(fixture.tool);
+  task = (await fixture.tool.execute('dispatch-before-cleanup-race', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: task.revision, candidateId: 'source',
+  })).details.task;
+  task = (await fixture.tool.execute('observe-before-cleanup-race', {
+    action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details.task;
+  assert.equal(task.status, 'ACTIVE');
+  assert.equal(task.cleanup, 'pending');
+
+  const stopped = (await fixture.tool.execute('cleanup-delete-race', {
+    action: 'cleanup', taskNodeId: contract.taskNodeId, expectedRevision: task.revision,
+  })).details;
+
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'STOP_REQUESTED');
+  assert.deepEqual(stopped.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(stopped.task.status, 'ACTIVE');
+  assert.equal(stopped.task.cleanup, 'pass');
+  assert.equal(workspaceDeletes, 0);
+  const held = await fixture.ledger.read(contract.taskNodeId, () => {});
+  assert.equal(held.state.gate.stopRequested, true);
+  assert.equal(held.state.history.some((entry) => entry.kind === 'workspace_cleanup_admitted'), false);
+
+  const repeated = (await fixture.tool.execute('cleanup-delete-race-readback', {
+    action: 'cleanup', taskNodeId: contract.taskNodeId, expectedRevision: stopped.task.revision,
+  })).details;
+  assert.equal(repeated.reason, 'STOP_REQUESTED');
+  assert.deepEqual(repeated.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(workspaceDeletes, 0);
+  assert.equal(reports.length, 1);
+});
+
 test('G18 G25 G37 G38 reactivation preserves counters and refusal tombstones', async () => {
   const { tool, ledger } = gateHarness();
   const active = await activateGate(tool);
