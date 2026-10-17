@@ -1,4 +1,4 @@
-import { createAcceptanceExecutor } from "../src/acceptance.js";
+import { createFixtureAcceptanceExecutor } from "../src/acceptance.js";
 import { createReadinessTool } from "../src/controller.js";
 import { createApprovalAdapter } from "../src/core/approval.js";
 import { approvalCard } from "../src/core/approval.js";
@@ -324,9 +324,8 @@ export function makeTool(overrides = {}) {
       ledger,
       now,
     }) ?? null;
-  const acceptance = createAcceptanceExecutor({
+  const acceptance = createFixtureAcceptanceExecutor({
     publicationStore: memoryStore(),
-    sourceIdentity: { version: "2026.10.3", commit: "f".repeat(40) },
     getConfig: () => ({}),
   });
   const ctx = {

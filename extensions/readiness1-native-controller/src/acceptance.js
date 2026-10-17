@@ -1,6 +1,64 @@
+import { readFile } from "node:fs/promises";
+
 import { ACCEPTANCE_ROWS, canonical, digest, requireThat } from "./contract.js";
 
 const LIVE_ONLY = "LIVE_ROUTE_EVIDENCE_REQUIRED";
+const TRUSTED_SOURCE_REQUIRED = "TRUSTED_SOURCE_DESCRIPTOR_REQUIRED";
+// The setup repository fixes this path and verifies the descriptor against the
+// integrated Git commit/tree before this source-only constructor is exercised.
+const DESCRIPTOR_URL = new URL("../../../openclaw-2026.10.3.json", import.meta.url);
+const FIXTURE_SOURCE = Object.freeze({
+  status: "UNKNOWN",
+  blocker: TRUSTED_SOURCE_REQUIRED,
+});
+
+async function readTrustedSourceIdentity() {
+  let descriptor;
+  try {
+    descriptor = JSON.parse(await readFile(DESCRIPTOR_URL, "utf8"));
+  } catch {
+    throw new Error("trusted acceptance source descriptor unavailable");
+  }
+  const integrated = descriptor?.integratedSource;
+  requireThat(
+    descriptor?.schema === "openclaw.readiness.production-source.v2" &&
+      descriptor.extensionSource === "pilot/pilot-1/plugins/readiness1-native-controller" &&
+      descriptor.extensionTarget === "extensions/readiness1-native-controller" &&
+      descriptor.packageComposition === "CORE_PACKAGE_INCLUDED_EXTENSION" &&
+      typeof descriptor.version === "string" &&
+      /^\d{4}\.\d{1,2}\.\d{1,2}$/.test(descriptor.version) &&
+      typeof descriptor.commit === "string" &&
+      /^[a-f0-9]{40}$/.test(descriptor.commit) &&
+      integrated &&
+      typeof integrated === "object" &&
+      !Array.isArray(integrated) &&
+      Object.keys(integrated).sort().join(",") ===
+        [
+          "commit",
+          "controllerSourceCommit",
+          "controllerSourceTreeSha256",
+          "deltaContentSha256",
+          "extensionTreeEntries",
+          "extensionTreeSha256",
+          "parentCommit",
+          "tree",
+        ]
+          .sort()
+          .join(",") &&
+      integrated.commit === descriptor.commit &&
+      /^[a-f0-9]{40}$/.test(integrated.tree) &&
+      /^[a-f0-9]{40}$/.test(integrated.parentCommit) &&
+      /^[a-f0-9]{40}$/.test(integrated.controllerSourceCommit) &&
+      /^[a-f0-9]{64}$/.test(integrated.controllerSourceTreeSha256) &&
+      /^[a-f0-9]{64}$/.test(integrated.extensionTreeSha256) &&
+      integrated.controllerSourceTreeSha256 === integrated.extensionTreeSha256 &&
+      Number.isSafeInteger(integrated.extensionTreeEntries) &&
+      integrated.extensionTreeEntries > 0 &&
+      /^[a-f0-9]{64}$/.test(integrated.deltaContentSha256),
+    "invalid trusted acceptance source descriptor",
+  );
+  return Object.freeze({ version: descriptor.version, commit: integrated.commit });
+}
 
 function measured(assertion, passed, source) {
   const evidence = { schema: "readiness1.native-measurement.v1", assertion, passed, source };
@@ -32,12 +90,8 @@ function fixedProbe(caseId, assertion, { config }) {
   return measured(assertion, false, "live-only-unimplemented");
 }
 
-export function createAcceptanceExecutor({
-  publicationStore,
-  sourceIdentity,
-  getConfig,
-  now = Date.now,
-}) {
+function buildAcceptanceExecutor(options, resolveSourceIdentity) {
+  const { publicationStore, getConfig, now = Date.now } = options;
   requireThat(
     publicationStore && typeof publicationStore.registerIfAbsent === "function",
     "native acceptance publisher unavailable",
@@ -50,24 +104,13 @@ export function createAcceptanceExecutor({
     typeof publicationStore.withCurrent === "function",
     "action-bound native acceptance publisher unavailable",
   );
-  requireThat(
-    sourceIdentity &&
-      typeof sourceIdentity === "object" &&
-      !Array.isArray(sourceIdentity) &&
-      Object.keys(sourceIdentity).sort().join(",") === "commit,version" &&
-      typeof sourceIdentity.version === "string" &&
-      /^\d{4}\.\d{1,2}\.\d{1,2}$/.test(sourceIdentity.version) &&
-      typeof sourceIdentity.commit === "string" &&
-      /^[a-f0-9]{40}$/.test(sourceIdentity.commit),
-    "invalid acceptance source identity",
-  );
-  const source = Object.freeze({ version: sourceIdentity.version, commit: sourceIdentity.commit });
   return Object.freeze({
     async execute({ runId, assertCurrent }) {
       requireThat(
         typeof runId === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{15,127}$/.test(runId),
         "invalid acceptance run id",
       );
+      const source = await resolveSourceIdentity();
       const config = getConfig();
       const observedAt = now();
       const cases = {};
@@ -142,4 +185,20 @@ export function createAcceptanceExecutor({
       };
     },
   });
+}
+
+export function createAcceptanceExecutor(options) {
+  requireThat(
+    options && !Object.hasOwn(options, "sourceIdentity"),
+    "caller-supplied acceptance source identity forbidden",
+  );
+  return buildAcceptanceExecutor(options, readTrustedSourceIdentity);
+}
+
+export function createFixtureAcceptanceExecutor(options) {
+  requireThat(
+    options && !Object.hasOwn(options, "sourceIdentity"),
+    "caller-supplied acceptance source identity forbidden",
+  );
+  return buildAcceptanceExecutor(options, async () => FIXTURE_SOURCE);
 }
