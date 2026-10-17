@@ -624,6 +624,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         }),
         runId,
         pid: adapter.pid,
+        processGroupId: adapter.processGroupId,
         startedAtMs,
         stdin: adapter.stdin,
         wait: () => waitPromise,

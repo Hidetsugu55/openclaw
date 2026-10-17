@@ -31,10 +31,16 @@ const log = createSubsystemLogger("agents/worktrees");
 
 const RELEASE_MAX_ATTEMPTS = 3;
 
-type WorktreeRunLease = {
+export type WorktreeRunLease = {
   id: string;
   token: string;
+  /** Existing callers may release without needing a cleanup receipt. */
   release: () => Promise<void>;
+  /**
+   * True only after both the durable lease row and the process-local Git guard
+   * have been released. False means cleanup remains retained for a later retry.
+   */
+  releaseWithReceipt: () => Promise<boolean>;
 };
 
 type HeldWorktreeLock = { refcount: number; gitLocked: boolean };
@@ -294,15 +300,24 @@ export async function acquireWorktreeRunLease(
     }
     throw error;
   }
-  let release: Promise<void> | undefined;
+  let release: Promise<boolean> | undefined;
   return {
     id,
     token,
-    release: () =>
+    release: async () => {
+      await (release ??= runLeaseCleanup(cleanup).then((complete) => {
+        if (!complete) {
+          pendingLeaseCleanups.add(cleanup);
+        }
+        return complete;
+      }));
+    },
+    releaseWithReceipt: () =>
       (release ??= runLeaseCleanup(cleanup).then((complete) => {
         if (!complete) {
           pendingLeaseCleanups.add(cleanup);
         }
+        return complete;
       })),
   };
 }

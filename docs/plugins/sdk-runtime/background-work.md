@@ -119,6 +119,27 @@ Start agent work in the background: hook-dispatched turns for external content a
 
     Gateway-backed runs return the canonical accepted `sessionKey` alongside `runId`. The field is optional in the TypeScript result only so explicit custom runtimes remain compatible.
 
+    For a trusted in-process pre-provider admission gate, use
+    `runWithExecutionControl(request, { beforeProvider, onObservation })`.
+    The Gateway awaits `beforeProvider(identity)` and rechecks its live run owner
+    before starting provider execution. Reject the callback to deny execution.
+    Use the existing `state.openKeyedStore({ namespace, retention: "retained" })`
+    `observe`/`compareAndApply` contract for durable claims; a CAS conflict must
+    reject admission. This surface does not add a separate ledger or approval authority.
+
+    The returned frozen `execution` identity contains native `runId`, `sessionKey`,
+    `sessionId`, `lifecycleGeneration`, and Gateway run/session/cleanup ownership.
+    Acceptance or cached replay alone is not proof of execution admission. Missing
+    native ownership fails closed as `UNKNOWN`.
+
+    Optional observations contain a monotonic sequence, that same frozen identity,
+    and frozen bounded provider activity, capacity-error classification, or attempt
+    terminal facts. They never include model text, tool arguments, or provider error
+    payloads. Missing output-token counts mean `UNKNOWN`, not zero. Attempt terminal
+    observations are not final logical-run attestation; use `waitForRun` for that
+    run's outcome. Keep observer work local and bounded. This core surface does not
+    implement external operations, approval receipts, or extension integration.
+
     `waitForRun(...)` returns the canonical Gateway wait result. `status` is `"ok"`, `"error"`, `"timeout"`, or `"pending"`; pending is a normal nonterminal observation, not an exception. Optional `error`, `startedAt`, `endedAt`, `stopReason`, `livenessState`, `yielded`, `pendingError`, `timeoutPhase`, `providerStarted`, and `terminalReply` metadata is preserved so callers can distinguish observation timeouts from terminal outcomes. `timeoutMs` bounds the wait call; it does not cancel the run.
 
     <Warning>

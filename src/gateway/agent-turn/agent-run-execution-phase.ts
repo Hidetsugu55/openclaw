@@ -12,6 +12,7 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { AgentRuntimeExecutionIdentity } from "../../agents/command/types.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -60,6 +61,7 @@ import {
 import { dispatchAgentRunWithCommentaryMedia } from "./agent-run-commentary-media.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
+import { createAgentRunExecutionControl } from "./agent-run-execution-control.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
@@ -79,6 +81,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
 
 async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<void> {
   const { prepared } = params;
+  const executionControl = createAgentRunExecutionControl(params);
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
     params.sessionEntry?.incognito,
@@ -123,7 +126,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         throw new Error("Agent settlement no longer owns this Gateway run");
       }
     };
-    const assertDispatchCurrent = () => {
+    const assertDispatchCurrent = (executionIdentity?: AgentRuntimeExecutionIdentity) => {
       params.assertContextCurrent?.();
       prepared.operatorAuthority?.assertCurrent();
       abortController.signal.throwIfAborted();
@@ -138,6 +141,9 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             abortEntry.operationalRunInstance !== operationalRunInstance ||
             abortEntry.lifecycleGeneration !== params.lifecycleGeneration ||
             abortEntry.sessionKey !== sessionKey ||
+            (executionIdentity !== undefined &&
+              (abortEntry.sessionId !== executionIdentity.sessionId ||
+                params.resolvedSessionId?.trim() !== executionIdentity.sessionId)) ||
             abortEntry.registrationCleanupRequested))
       ) {
         throw new Error("agent dispatch no longer owns this Gateway run");
@@ -562,8 +568,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                   if (!authority) {
                     throw new Error("agent run delegated authority was not admitted");
                   }
-                  // Sessionless runs intentionally have no abort-map owner. Their
-                  // prepared admission retains authority until agentCommand closes it.
+                  // Sessionless runs retain prepared admission, not abort-map ownership.
                   if (prepared.activeRunAbort.registered) {
                     prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
                   }
@@ -577,8 +582,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
                 abortSignal: prepared.activeRunAbort.controller.signal,
                 lifecycleGeneration: params.lifecycleGeneration,
-                onExecutionStarted: () => {
-                  if (!prepared.activeRunAbort.markExecutionStarted()) {
+                onExecutionStarted: async () => {
+                  if (!(await executionControl.markExecutionStarted(assertDispatchCurrent))) {
                     return;
                   }
                   params.io.emitExecutionStarted?.();
@@ -594,6 +599,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                     );
                   }
                 },
+                runtimeExecutionObserver:
+                  params.runtimeExecutionObserver && executionControl.publishExecutionObservation,
+                runtimeProcessCustody: params.requireDirectLocalProcessCustody
+                  ? { requireDirectLocalProcess: true }
+                  : undefined,
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   context: params.context,
                   runId: params.runId,

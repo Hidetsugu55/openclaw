@@ -641,6 +641,14 @@ export async function createChildAdapter(
     get pid() {
       return windowsJob?.commandPid ?? child.pid;
     },
+    get processGroupId() {
+      // Only the detached POSIX path owns a dedicated group. The no-detach
+      // fallback shares the Gateway group and must never be certified as
+      // run-owned cleanup custody.
+      return childIsDetached && Number.isSafeInteger(child.pid) && child.pid! > 0
+        ? child.pid
+        : undefined;
+    },
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: true,

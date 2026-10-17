@@ -411,6 +411,44 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
 
     expect(result.sourceReplyDelivered).toBe(entry.expected);
+    if (entry.receiptRunId) {
+      expect(result.terminalReceipt).toBeUndefined();
+    } else {
+      expect(result.terminalReceipt).toMatchObject({
+        runId: "run-source-reply",
+        sessionId: "session-source",
+        turnId: "turn-source",
+      });
+      expect(Object.isFrozen(result.terminalReceipt)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.requested)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.effective)).toBe(true);
+      expect(Object.isFrozen(result.terminalReceipt?.successfulToolNames)).toBe(true);
+    }
+  });
+
+  it("copies the run-owned terminal receipt before exposing it to wait consumers", async () => {
+    const receipt = {
+      runId: "run-copy",
+      sessionId: "session-copy",
+      turnId: "turn-copy",
+      requested: { provider: "codex", model: "requested" },
+      effective: { provider: "codex", model: "effective", responseModel: "effective" },
+      successfulToolNames: ["read"],
+      rerouted: false,
+      terminalDisposition: "visible",
+    };
+    callGatewayMock.mockResolvedValue({ status: "ok", terminalReceipt: receipt });
+
+    const result = await waitForAgentRun({ runId: "run-copy", timeoutMs: 500 });
+    receipt.requested.model = "mutated";
+    receipt.effective.responseModel = "mutated";
+    receipt.successfulToolNames.push("exec");
+
+    expect(result.terminalReceipt).toMatchObject({
+      requested: { model: "requested" },
+      effective: { responseModel: "effective" },
+      successfulToolNames: ["read"],
+    });
   });
 
   it("normalizes wait timeouts before sending agent.wait", async () => {

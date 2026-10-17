@@ -109,6 +109,7 @@ describe("plugin runtime session creation", () => {
         key,
         label: "Native Codex thread",
         displayName: "  Native display title  ",
+        spawnedWorkspaceDir: "/workspace/codex-native-thread",
         initialEntry: {
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -140,6 +141,7 @@ describe("plugin runtime session creation", () => {
           modelSelectionLocked: true,
           label: "Native Codex thread",
           displayName: "Native display title",
+          spawnedWorkspaceDir: "/workspace/codex-native-thread",
           pluginExtensions: {
             codex: {
               supervision: {
@@ -173,6 +175,58 @@ describe("plugin runtime session creation", () => {
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toEqual(created.entry);
+    });
+  });
+
+  it("persists a required sandbox as part of trusted session creation", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-required-sandbox-session" },
+      async (state) => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:harness:openclaw:source-worktree";
+        const sourceWorkspace = path.join(state.workspaceDir, "source-worktree");
+        const cfg = { agents: { defaults: { workspace: state.workspaceDir } } };
+        fs.mkdirSync(sourceWorkspace, { recursive: true });
+        const created = await runtime.session.createSessionEntry({
+          cfg,
+          key,
+          spawnedWorkspaceDir: sourceWorkspace,
+          spawnedCwd: sourceWorkspace,
+          sessionRoot: sourceWorkspace,
+          permissionMode: "workspace",
+          sandbox: "required",
+          sourceToolPolicy: "readiness1-source-v1",
+          initialEntry: { agentHarnessId: "openclaw" },
+        });
+
+        expect(created.entry).toMatchObject({
+          sandbox: "required",
+          spawnedWorkspaceDir: sourceWorkspace,
+          spawnedCwd: sourceWorkspace,
+          sessionRoot: sourceWorkspace,
+          permissionMode: "workspace",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read", "exec", "apply_patch"],
+        });
+        expect(created.entry.inheritedToolDeny).toBeUndefined();
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toEqual(created.entry);
+      },
+    );
+  });
+
+  it("rejects a source tool policy outside the trusted host runtime path", async () => {
+    const result = await createGatewaySession({
+      cfg: {},
+      key: "agent:main:subagent:untrusted-source-tool-policy",
+      commandSource: "test",
+      sourceToolPolicy: "readiness1-source-v1",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "source session tool policy requires trusted host authorization" },
     });
   });
 
@@ -565,6 +619,7 @@ describe("plugin runtime session creation", () => {
             agentHarnessId: "codex",
             modelSelectionLocked: true,
             pluginExtensions: persistedPluginExtensions,
+            spawnedWorkspaceDir: "/workspace",
             spawnedCwd: "/workspace/project",
             sessionRoot: "/workspace",
             permissionMode: "guarded",
@@ -576,6 +631,7 @@ describe("plugin runtime session creation", () => {
           key,
           label: "Replacement label must be ignored",
           displayName: "Renamed upstream title must be ignored",
+          spawnedWorkspaceDir: "/workspace",
           spawnedCwd: "/workspace/project",
           sessionRoot: "/workspace",
           permissionMode: "guarded",
@@ -599,6 +655,7 @@ describe("plugin runtime session creation", () => {
         expect(recovered.sessionId).toBe(sessionId);
         expect(recovered.entry.label).toBe(naming.label);
         expect(recovered.entry.displayName).toBe(naming.displayName);
+        expect(recovered.entry.spawnedWorkspaceDir).toBe("/workspace");
         expect(recovered.entry.initializationPending).toBeUndefined();
         expect(recovered.entry.pluginExtensions).toEqual({
           codex: { supervision: { sourceThreadId: "source-1", modelLocked: true } },

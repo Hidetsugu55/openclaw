@@ -61,6 +61,36 @@ describe("retained plugin state", () => {
     });
   });
 
+  it("admits one simultaneous authority claim and retains the winner across reopening", async () => {
+    await withOpenClawTestState({ label: "retained-authority-ledger-cas" }, async () => {
+      const options = { namespace: "authority-ledger", retention: "retained" as const };
+      const ledger = createPluginStateKeyedStore<{ owner: string }>(pluginId, options);
+      const observed = await ledger.observe("task:one");
+      const contenders = ["writer-a", "writer-b", "writer-c"];
+
+      const outcomes = await Promise.all(
+        contenders.map(async (owner) => ({
+          owner,
+          result: await ledger.compareAndApply("task:one", observed.comparison, {
+            operation: "update",
+            action: "set",
+            value: { owner },
+          }),
+        })),
+      );
+
+      expect(outcomes.filter(({ result }) => result.status === "applied")).toHaveLength(1);
+      expect(outcomes.filter(({ result }) => result.status === "conflict")).toHaveLength(2);
+      const winner = outcomes.find(({ result }) => result.status === "applied")?.owner;
+      expect(winner).toBeDefined();
+
+      await closePluginStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const reopened = createPluginStateKeyedStore<{ owner: string }>(pluginId, options);
+      await expect(reopened.lookup("task:one")).resolves.toEqual({ owner: winner });
+    });
+  });
+
   it("moves raw data atomically, preserves canonical targets, and pages lexical keys", async () => {
     await withOpenClawTestState({ label: "retained-storage-move" }, async () => {
       const now = Date.now();

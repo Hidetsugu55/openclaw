@@ -102,9 +102,15 @@ type RuntimeCreateSessionEntryBaseParams = {
   label?: string;
   /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
   displayName?: string;
+  /** Workspace inherited by the session and reused on later Gateway turns. */
+  spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: RuntimeSessionEntry["permissionMode"];
+  /** Host-only creation requirement; the session must fail closed without a sandbox. */
+  sandbox?: "required";
+  /** Host-only marker for the exact Readiness #1 source-session tool allowlist. */
+  sourceToolPolicy?: "readiness1-source-v1";
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
@@ -516,6 +522,7 @@ export type PluginRuntimeCore = {
     openBlobStore: <TMetadata>(
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
     ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
+    /** Retained observe/compareAndApply stores are the supported durable authority-ledger CAS. */
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;

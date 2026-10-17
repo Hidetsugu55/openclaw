@@ -34,6 +34,8 @@ export type ManagedRun = {
   readonly activity: ProcessRunActivity;
   runId: string;
   pid?: number;
+  /** Dedicated POSIX process group created for this run; absent on fallback/unsupported paths. */
+  processGroupId?: number;
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
@@ -84,6 +86,8 @@ export type ProcessCleanupResult = {
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
+  /** Dedicated POSIX process group created for this adapter, never inferred from its PID. */
+  processGroupId?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
   /** Both output subscriptions observe bytes separately from decoded text. */

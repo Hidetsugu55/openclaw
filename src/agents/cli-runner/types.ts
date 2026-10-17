@@ -30,6 +30,10 @@ import type {
   AgentRunTranscriptContext,
   AgentRunLifecycle,
 } from "../command/shared-types.js";
+import type {
+  AgentRuntimeExecutionObservation,
+  AgentRuntimeProcessCustodyRequest,
+} from "../command/types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
@@ -161,6 +165,10 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
+  /** Internal-only direct local-process custody admission. */
+  runtimeProcessCustody?: AgentRuntimeProcessCustodyRequest;
+  /** Trusted in-process lifecycle observer; never serialized into CLI input. */
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionObservation) => unknown;
   /** Internal completion caller's representation of operator authorization failures. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;

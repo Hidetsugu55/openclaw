@@ -34,6 +34,7 @@ export type {
   OpenAsyncKeyedStoreOptions,
   OpenRetainedKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginAuthorityLedger,
   PluginStateCompareIntent,
   PluginStateCompareResult,
   PluginStateEntry,

@@ -252,13 +252,42 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
               if (!ctx.assertInvocationCurrent) {
                 throw new Error("Version 2 tool factories require host invocation authority");
               }
-              return tool.create({
+              const factoryContext: OpenClawPluginToolContext<2> = {
                 ...ctx,
                 get senderIsOwner() {
                   return ctx.senderIsOwner;
                 },
                 assertInvocationCurrent: ctx.assertInvocationCurrent,
-              });
+              };
+              const originTriggerDescriptor = Object.getOwnPropertyDescriptor(ctx, "originTrigger");
+              const deviceIdDescriptor = Object.getOwnPropertyDescriptor(ctx, "deviceId");
+              const originTrigger = originTriggerDescriptor?.value;
+              const deviceId = deviceIdDescriptor?.value;
+              if (
+                originTrigger === "direct-user" &&
+                originTriggerDescriptor?.configurable === false &&
+                originTriggerDescriptor.writable === false &&
+                typeof deviceId === "string" &&
+                deviceId.length > 0 &&
+                deviceIdDescriptor?.configurable === false &&
+                deviceIdDescriptor.writable === false
+              ) {
+                Object.defineProperties(factoryContext, {
+                  originTrigger: {
+                    configurable: false,
+                    enumerable: true,
+                    value: originTrigger,
+                    writable: false,
+                  },
+                  deviceId: {
+                    configurable: false,
+                    enumerable: true,
+                    value: deviceId,
+                    writable: false,
+                  },
+                });
+              }
+              return tool.create(factoryContext);
             }
           : (_ctx: OpenClawPluginToolContext) => tool;
     if (typeof tool !== "function" && !versioned) {

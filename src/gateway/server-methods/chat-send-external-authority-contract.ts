@@ -2,7 +2,7 @@ import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-a
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type ChatSendExternalAdmissionParams = {
+export type ChatSendExternalAdmissionParams = {
   runId: string;
   sessionKey: string;
   spawnedBy?: string;
@@ -19,6 +19,12 @@ type ChatSendExternalAdmissionParams = {
 
 export type ChatSendExternalAuthorityAdmission = {
   resolve(params: ChatSendExternalAdmissionParams): CronCreatorAuthorityCapability | undefined;
+  resolveDirectUserPluginToolProvenance?: (
+    params: ChatSendExternalAdmissionParams,
+  ) => Promise<
+    | import("../../agents/direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance
+    | undefined
+  >;
   allowsDashboardReads(params: ChatSendExternalAdmissionParams): boolean;
   run<T>(capability: CronCreatorAuthorityCapability, run: () => T, signal?: AbortSignal): T;
 };

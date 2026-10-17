@@ -119,6 +119,7 @@ function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRun
   const subagent: PluginRuntime["subagent"] = {
     complete: (...args) => runtime.subagent.complete(...args),
     run: (...args) => runtime.subagent.run(...args),
+    runWithExecutionControl: (...args) => runtime.subagent.runWithExecutionControl(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
     deleteSession: (...args) => runtime.subagent.deleteSession(...args),

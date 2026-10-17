@@ -1,0 +1,172 @@
+import { digest, requireThat, validateTaskDescriptor } from './contract.js';
+
+export function nativeWorkerSessionKey(agentId, taskNodeId) {
+  requireThat(/^[a-z0-9][a-z0-9_-]{0,63}$/.test(agentId), 'invalid fixed worker agent');
+  return `agent:${agentId}:subagent:workboard-readiness1-${digest(taskNodeId).slice(0, 24)}`;
+}
+
+export function createNativeBridge({ config, readCanonicalDescriptor: readHostCanonicalDescriptor, runCanonicalReadOnly: runHostCanonicalReadOnly, prepareWorkspaceFixture, snapshotWorkspace, readCapacity, startReservedExecution, observeNativeRun, cleanupWorkspace, sourceRunLifecycle, ownerApprovalAvailable, sendFixedOwnerDM, coordinateFixedTask }) {
+  const descriptors = new Map(config.tasks.map((descriptor) => [descriptor.contract.taskNodeId, descriptor]));
+
+  async function descriptor(taskNodeId) {
+    if (typeof readHostCanonicalDescriptor === 'function') {
+      const value = await readHostCanonicalDescriptor(taskNodeId);
+      const fixed = validateTaskDescriptor(value);
+      requireThat(fixed.contract.taskNodeId === taskNodeId, 'canonical Task descriptor/key mismatch');
+      return fixed;
+    }
+    const value = descriptors.get(taskNodeId);
+    requireThat(value, 'canonical Task is not configured');
+    return value;
+  }
+
+  async function snapshot(task, workspace) {
+    requireThat(typeof snapshotWorkspace === 'function', 'SOURCE_INTEGRITY_NATIVE_SURFACE_UNAVAILABLE');
+    const result = await snapshotWorkspace(task, workspace);
+    requireThat(result?.repo === task.repo && result.worktree === task.root && result.head === task.head, 'source integrity snapshot mismatch');
+    requireThat(result.dirty === '' && result.indexDigest === (await descriptor(task.taskNodeId)).indexDigest, 'source integrity dirty/index mismatch');
+    return result;
+  }
+
+  return Object.freeze({
+    readCanonicalTask: async (taskNodeId) => {
+      return (await descriptor(taskNodeId)).contract;
+    },
+
+    async runCanonicalReadOnly({ taskNodeId, ticketId, admit, onObservation }) {
+      requireThat(typeof runHostCanonicalReadOnly === 'function', 'READ_ONLY_NATIVE_RUN_UNAVAILABLE');
+      requireThat(typeof admit === 'function', 'READ_ONLY_NATIVE_ADMISSION_UNAVAILABLE');
+      const fixed = await descriptor(taskNodeId);
+      const expectedSessionKey = nativeWorkerSessionKey(config.workerAgentId, fixed.contract.taskNodeId);
+      return runHostCanonicalReadOnly({
+        taskNodeId: fixed.contract.taskNodeId,
+        ticketId,
+        async beforeProvider(identity) {
+          requireThat(identity?.sessionKey === expectedSessionKey, 'native read-only session mismatch');
+          await admit(identity);
+        },
+        ...(typeof onObservation === 'function' ? { onObservation } : {}),
+      });
+    },
+
+    async assertOwnerApprovalAvailable() {
+      requireThat(typeof ownerApprovalAvailable === 'function' && await ownerApprovalAvailable() === true, 'OWNER_APPROVAL_PUBLIC_SURFACE_UNAVAILABLE');
+    },
+
+    preflightDispatch() {
+      if (sourceRunLifecycle) {
+        requireThat(typeof sourceRunLifecycle.launch === 'function' && typeof sourceRunLifecycle.observe === 'function' && typeof sourceRunLifecycle.cleanup === 'function', 'SOURCE_RUN_V7_LIFECYCLE_UNAVAILABLE');
+      } else {
+        requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
+      }
+      requireThat(typeof snapshotWorkspace === 'function', 'SOURCE_INTEGRITY_PUBLIC_SURFACE_UNAVAILABLE');
+      requireThat(typeof readCapacity === 'function', 'PROVIDER_CAPACITY_PUBLIC_SURFACE_UNAVAILABLE');
+      requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
+    },
+
+    async prepareWorkspace(task, { claimId, assertCurrent, admit }) {
+      const fixed = await descriptor(task.taskNodeId);
+      assertCurrent();
+      const sessionKey = nativeWorkerSessionKey(config.workerAgentId, task.taskNodeId);
+      requireThat(typeof prepareWorkspaceFixture === 'function', 'WORKSPACE_PUBLIC_SURFACE_UNAVAILABLE');
+      requireThat(typeof admit === 'function', 'WORKSPACE_CREATE_ADMISSION_UNAVAILABLE');
+      let admitted = false;
+      const prepared = await prepareWorkspaceFixture(Object.freeze({
+        fixtureOnly: true,
+        task: structuredClone(task),
+        sourceRoot: fixed.sourceRoot,
+        worktreeName: fixed.worktreeName,
+        worktreeBranch: fixed.worktreeBranch,
+        workerAgentId: config.workerAgentId,
+        sessionKey,
+        claimId,
+        requiredToolNames: Object.freeze(['read', 'exec', 'apply_patch']),
+        async admitWorkspaceCreate() {
+          requireThat(!admitted, 'workspace-create admission replay');
+          assertCurrent();
+          await admit();
+          admitted = true;
+        },
+      }));
+      requireThat(admitted, 'workspace creation attempted without lifecycle admission');
+      const workspace = { id: prepared.id, path: prepared.path, branch: prepared.branch, agentId: config.workerAgentId, sessionKey, claimId };
+      requireThat(workspace.path === task.root && workspace.branch === fixed.worktreeBranch, 'managed worktree identity mismatch');
+      requireThat(prepared.sandboxed === true && prepared.workspaceAccess === 'rw' && !prepared.confinementError, 'required native worker sandbox unavailable');
+      return { workspace, snapshot: await snapshot(task, workspace) };
+    },
+
+    exactSnapshot: snapshot,
+
+    async nativeCapacityNoWork(task) {
+      requireThat(typeof readCapacity === 'function', 'PROVIDER_CAPACITY_PUBLIC_SURFACE_UNAVAILABLE');
+      return readCapacity(task);
+    },
+
+    async launchReserved({ contract, workspace, ticketId, assertCurrent, admit }) {
+      const fixed = await descriptor(contract.taskNodeId);
+      requireThat(workspace.path === contract.root && workspace.sessionKey === nativeWorkerSessionKey(config.workerAgentId, contract.taskNodeId), 'native launch workspace/session mismatch');
+      if (sourceRunLifecycle) return sourceRunLifecycle.launch({ contract, workspace, ticketId, assertCurrent, admit });
+      requireThat(typeof startReservedExecution === 'function', 'EXECUTION_START_ADMISSION_CONTROLLER_WIRING_UNAVAILABLE');
+      let admitted = false;
+      const accepted = await startReservedExecution({
+        fixtureOnly: true,
+        descriptor: Object.freeze({ sessionKey: workspace.sessionKey, instructions: fixed.instructions, lane: `workboard:readiness1:${digest(contract.taskNodeId).slice(0, 24)}`, idempotencyKey: ticketId, cwd: workspace.path, promptMode: 'minimal', lightContext: true, deliver: false }),
+        async admitExecutionStart() {
+          requireThat(!admitted, 'execution-start admission replay');
+          assertCurrent();
+          await admit();
+          admitted = true;
+        },
+      });
+      requireThat(admitted, 'provider work attempted without execution-start admission');
+      requireThat(accepted.runId === ticketId && (accepted.sessionKey ?? workspace.sessionKey) === workspace.sessionKey, 'native accepted receipt identity mismatch');
+      return { runId: accepted.runId, sessionKey: accepted.sessionKey ?? workspace.sessionKey };
+    },
+
+    async observeNativeRun(binding) {
+      if (sourceRunLifecycle) return sourceRunLifecycle.observe(Object.freeze({ ...binding }));
+      requireThat(typeof observeNativeRun === 'function', 'NATIVE_OBSERVATION_CONTROLLER_WIRING_UNAVAILABLE');
+      return observeNativeRun(Object.freeze({ ...binding }));
+    },
+
+    async cleanupWorkspace(task, workspace, options = {}) {
+      requireThat(workspace.path === task.root, 'cleanup worktree mismatch');
+      const admissionRequired = typeof options.admit === 'function';
+      let admitted = false;
+      const admitWorkspaceCleanup = async () => {
+        requireThat(!admitted, 'workspace-cleanup admission replay');
+        options.assertCurrent?.();
+        if (admissionRequired) await options.admit();
+        admitted = true;
+      };
+      if (sourceRunLifecycle) {
+        const receipt = await sourceRunLifecycle.cleanup(Object.freeze({
+          taskNodeId: task.taskNodeId,
+          root: task.root,
+          workspace: structuredClone(workspace),
+          admitWorkspaceCleanup,
+        }));
+        requireThat(!admissionRequired || admitted, 'workspace cleanup attempted without lifecycle admission');
+        return receipt;
+      }
+      requireThat(typeof cleanupWorkspace === 'function', 'LOSSLESS_CLEANUP_PUBLIC_SURFACE_UNAVAILABLE');
+      const receipt = await cleanupWorkspace(Object.freeze({ taskNodeId: task.taskNodeId, root: task.root, workspace: structuredClone(workspace), admitWorkspaceCleanup }));
+      requireThat(!admissionRequired || admitted, 'workspace cleanup attempted without lifecycle admission');
+      return receipt;
+    },
+
+    async sendFixedOwnerDM(payload) {
+      requireThat(typeof sendFixedOwnerDM === 'function', 'FIXED_OWNER_NOTIFICATION_PUBLIC_SURFACE_UNAVAILABLE');
+      return sendFixedOwnerDM(payload);
+    },
+
+    notificationEventId(task, payload) {
+      return digest({ taskNodeId: task.taskNodeId, kind: payload.kind, evidence: payload.evidence ?? [] });
+    },
+
+    async coordinateFixedTask(action, task, reservation) {
+      requireThat(typeof coordinateFixedTask === 'function', 'FIXED_GITHUB_PUBLIC_SURFACE_UNAVAILABLE');
+      return coordinateFixedTask(action, task, reservation);
+    },
+  });
+}

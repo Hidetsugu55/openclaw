@@ -163,6 +163,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
+    directUserPluginToolProvenance: params.run.directUserPluginToolProvenance,
     bootstrapUserProfileId: params.run.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     toolBindings: params.run.toolBindings,

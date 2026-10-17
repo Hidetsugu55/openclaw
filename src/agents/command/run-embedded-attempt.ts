@@ -140,6 +140,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(
     attemptLifecycleState,
     params.preparedRunAdmission.onRuntimeTurnStarted,
+    params.opts.runtimeExecutionObserver,
   );
   const transcriptMedia = params.opts.transcriptMedia ?? [];
   const hasTranscriptMedia = transcriptMedia.length > 0;

@@ -1,0 +1,23 @@
+{
+  "name": "@hidetsugu55/openclaw-readiness1-native-controller",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Fail-closed OpenClaw 2026.10.3 adapter with canonical Readiness #1 authority, a fixture-only Readiness #2 Execution Gate, and offline-only Readiness #3 GitHub Guardrails source.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:candidate-integration": "node --test ../../tests/openclaw-2026.10.3-candidate.test.mjs"
+  },
+  "openclaw": {
+    "extensions": [
+      "./runtime.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.10.3 <2026.10.4",
+      "minGatewayVersion": "2026.10.3"
+    },
+    "build": {
+      "openclawVersion": "2026.10.3"
+    }
+  }
+}

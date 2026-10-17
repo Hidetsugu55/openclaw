@@ -166,6 +166,7 @@ describe("plugin registry runtime session ownership", () => {
     const subagent = {
       complete: vi.fn(async () => ({ text: "completed" })),
       run: vi.fn(async () => ({ runId: "subagent-run" })),
+      runWithExecutionControl: vi.fn<PluginRuntime["subagent"]["runWithExecutionControl"]>(),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
       deleteSession: vi.fn(async () => {}),
@@ -310,6 +311,20 @@ describe("plugin registry runtime session ownership", () => {
     ).rejects.toThrow("only with its exact session target identity");
     await rejectedByOwner(
       other.runtime.subagent.run({ sessionKey: key.reserved, message: "continue" }),
+    );
+    await rejectedByOwner(
+      other.runtime.subagent.runWithExecutionControl(
+        { sessionKey: key.reserved, message: "continue" },
+        { beforeProvider: async () => {} },
+      ),
+    );
+    expect(subagent.runWithExecutionControl).not.toHaveBeenCalled();
+    const executionControl = { beforeProvider: async () => {} };
+    const controlledRequest = { sessionKey: key.reserved, message: "continue" };
+    await owner.runtime.subagent.runWithExecutionControl(controlledRequest, executionControl);
+    expect(subagent.runWithExecutionControl).toHaveBeenCalledExactlyOnceWith(
+      controlledRequest,
+      executionControl,
     );
     await rejectedByOwner(other.runtime.subagent.deleteSession({ sessionKey: key.reserved }));
     await rejectedByOwner(

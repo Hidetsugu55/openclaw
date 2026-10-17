@@ -31,6 +31,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import {
+  clearDirectUserPluginToolProvenanceForQueue,
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
@@ -86,6 +87,7 @@ export function enqueueFollowupRun(
   if (isFollowupRunAborted(run)) {
     return false;
   }
+  clearDirectUserPluginToolProvenanceForQueue(run);
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
   }

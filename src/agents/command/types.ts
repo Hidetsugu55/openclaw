@@ -55,6 +55,75 @@ export type AgentRunContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+/** Native host identity captured at the last boundary before provider execution. */
+export type AgentRuntimeExecutionIdentity = Readonly<{
+  runId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleGeneration: string;
+  resourceOwnership: Readonly<{
+    run: "gateway";
+    session: "gateway";
+    cleanup: "gateway";
+  }>;
+}>;
+
+/**
+ * Bounded attempt facts, not final logical-run attestation. Missing outputTokens means
+ * UNKNOWN, never zero. Model text, tool input, and provider payloads are never included.
+ */
+export type AgentRuntimeExecutionObservation = Readonly<
+  | { kind: "provider_activity"; toolCallStarted: boolean; outputTokens?: number }
+  | { kind: "provider_error"; capacityExhausted: boolean }
+  | { kind: "terminal"; status: "ok" | "error" }
+  /** Opaque custody emitted exactly after direct local CLI process admission. */
+  | { kind: "direct_local_process_custody"; custody: AgentRuntimeDirectLocalProcessCustody }
+  /**
+   * Terminal result facts produced only after the command has finished its
+   * durable result/delivery handling. The payload never contains model text,
+   * tool input, or provider payloads.
+   */
+  | {
+      kind: "final";
+      result: Readonly<{ digest: string; byteLength: number }>;
+      usage: number;
+    }
+>;
+
+/** Immutable, ordered observation delivered only through the trusted in-process runtime. */
+export type AgentRuntimeExecutionEvent = Readonly<{
+  identity: AgentRuntimeExecutionIdentity;
+  sequence: number;
+  observation: AgentRuntimeExecutionObservation;
+}>;
+
+/**
+ * Opaque custody for one direct, host-local CLI process group. It deliberately
+ * exposes only cleanup facts: callers cannot inspect a PID, host path, command,
+ * provider payload, or listener details.
+ */
+export type AgentRuntimeDirectLocalProcessCustody = Readonly<{
+  kind: "direct-local-process-group";
+  cleanupAndObserve: () => Promise<
+    Readonly<{
+      processStopped: boolean;
+      groupStopped: boolean;
+      /** This exact execution path allocated no run-owned container. */
+      containerAbsent: true;
+      lsofClear: boolean;
+    }>
+  >;
+}>;
+
+/**
+ * Host-only process-custody request. It is not accepted from RPC input and
+ * carries no caller-supplied process identity.
+ */
+export type AgentRuntimeProcessCustodyRequest = Readonly<{
+  /** Reject node/plugin execution before provider work; only direct local CLI is admissible. */
+  requireDirectLocalProcess: true;
+}>;
+
 /** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
@@ -137,6 +206,8 @@ export type AgentCommandOpts = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-authorized dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;
+  /** Host-only paired direct-user provenance; never accepted from public ingress. */
+  directUserPluginToolProvenance?: import("../direct-user-plugin-tool-provenance.js").DirectUserPluginToolProvenance;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -159,6 +230,10 @@ export type AgentCommandOpts = {
   lifecycleGeneration?: string;
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
+  /** Trusted in-process observer; receives bounded lifecycle facts and never model text. */
+  runtimeExecutionObserver?: (event: AgentRuntimeExecutionObservation) => unknown;
+  /** Trusted in-process request for one opaque direct-local process custody. */
+  runtimeProcessCustody?: AgentRuntimeProcessCustodyRequest;
   extraSystemPrompt?: string;
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -270,6 +345,7 @@ type AgentCommandGatewayOnlyKey =
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
   | "pinnedWidgetAuthoring"
+  | "directUserPluginToolProvenance"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "operatorAuthority"
@@ -279,6 +355,8 @@ type AgentCommandGatewayOnlyKey =
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
+  | "runtimeExecutionObserver"
+  | "runtimeProcessCustody"
   | "beforeTerminalDelivery"
   | "prepareAssistantTranscriptMessage"
   | "internalDeliverySuppressErrors";

@@ -12,6 +12,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type AttemptToolRunFacts = Pick<
   RunEmbeddedAgentParams,
   | "clientCaps"
+  | "directUserPluginToolProvenance"
   | "gatewayUiCommandTarget"
   | "pinnedWidgetAuthoring"
   | "toolBindings"
@@ -73,6 +74,7 @@ export function buildEmbeddedAttemptToolRunContext(
   });
   return {
     clientCaps: params.clientCaps,
+    directUserPluginToolProvenance: params.directUserPluginToolProvenance,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,

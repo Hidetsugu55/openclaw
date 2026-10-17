@@ -20,6 +20,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { notifyAgentRunExecutionCanary } from "./agent-turn/agent-run-execution-canary.test-seam.js";
 import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
@@ -199,6 +200,7 @@ export function registerChatAbortController(params: {
   };
   let executionStarted = false;
   const markExecutionStarted = () => {
+    notifyAgentRunExecutionCanary({ kind: "mark-execution-started", runId: params.runId });
     if (executionStarted) {
       return false;
     }

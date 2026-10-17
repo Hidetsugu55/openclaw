@@ -2094,6 +2094,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/readiness1-native-controller: {}
+
   extensions/runway:
     devDependencies:
       '@openclaw/plugin-sdk':

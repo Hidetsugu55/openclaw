@@ -84,6 +84,7 @@ import { serializePluginStoreJson } from "./plugin-store-validation.js";
 // ids, namespaces, JSON values, TTLs, and namespace limits before persistence.
 export type {
   OpenAsyncKeyedStoreOptions,
+  PluginAuthorityLedger,
   OpenRetainedKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareIntent,

@@ -117,6 +117,9 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
+const READINESS1_SOURCE_TOOL_POLICY = "readiness1-source-v1";
+const READINESS1_SOURCE_TOOL_ALLOW = ["read", "exec", "apply_patch"] as const;
+
 export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
@@ -241,6 +244,20 @@ export async function createGatewaySession(
   );
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
+  }
+  const sourceToolPolicy =
+    params.sourceToolPolicy === READINESS1_SOURCE_TOOL_POLICY &&
+    params.commandSource === "plugin-runtime" &&
+    params.creation?.via === "plugin" &&
+    params.authorizedAgentHarnessId === "openclaw" &&
+    params.initialEntry?.agentHarnessId === "openclaw"
+      ? {
+          inheritedToolPolicyVersion: 1 as const,
+          inheritedToolAllow: [...READINESS1_SOURCE_TOOL_ALLOW],
+        }
+      : undefined;
+  if (params.sourceToolPolicy !== undefined && !sourceToolPolicy) {
+    return invalidSessionRequest("source session tool policy requires trusted host authorization");
   }
   // Capture the requested incarnation before worker discovery yields to authority preparation.
   const initialTargetEntry = explicitTargetKey
@@ -607,6 +624,7 @@ export async function createGatewaySession(
       !currentTargetEntry &&
       parentSessionTarget?.agentId === target.agentId &&
       !projectId &&
+      !params.spawnedWorkspaceDir &&
       !params.spawnedCwd &&
       !params.sessionRoot &&
       !params.execNode &&
@@ -625,7 +643,9 @@ export async function createGatewaySession(
       return { ok: false, error: forkWorkspace.error };
     }
     const inheritedWorkspace = forkWorkspace?.value;
-    const requestedRoot = normalizeOptionalString(params.spawnedCwd ?? params.sessionRoot);
+    const requestedRoot = normalizeOptionalString(
+      params.spawnedCwd ?? params.sessionRoot ?? params.spawnedWorkspaceDir,
+    );
     // The parent lock has resolved inherited policy; validate direct roots before binding
     // a child or allowing transcript/baseline preparation to process the selected checkout.
     if (sandboxRequired && requestedRoot && !params.execNode) {
@@ -674,6 +694,7 @@ export async function createGatewaySession(
     }
     preparedLifecycle = preparationResult?.value;
     const pendingWorktree = preparedLifecycle?.pendingWorktree ?? params.pendingWorktree;
+    const spawnedWorkspaceDir = normalizeOptionalString(params.spawnedWorkspaceDir);
     const spawnedCwd = normalizeOptionalString(
       preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? inheritedWorkspace?.spawnedCwd,
     );
@@ -736,6 +757,9 @@ export async function createGatewaySession(
         }
         if (spawnToolPolicy && existingEntry !== undefined) {
           return invalidSessionRequest("spawn tool policy requires a new session");
+        }
+        if (sourceToolPolicy && existingEntry !== undefined) {
+          return invalidSessionRequest("source session tool policy requires a new session");
         }
         const visibility = resolveSessionCreateVisibility(params, existingEntry);
         if (!visibility.ok) {
@@ -893,6 +917,7 @@ export async function createGatewaySession(
             projectId,
             pendingProjectGitUrl,
             pendingWorktree,
+            spawnedWorkspaceDir,
             spawnedCwd,
             preparedLifecycle,
           }),
@@ -948,6 +973,7 @@ export async function createGatewaySession(
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
           ...(existingEntry === undefined ? spawnToolPolicy : {}),
+          ...(existingEntry === undefined ? sourceToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         const explicitParentSessionKey =

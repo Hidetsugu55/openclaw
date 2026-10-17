@@ -331,6 +331,7 @@ export function runAgentAttempt(
     senderIsOwner: params.opts.senderIsOwner,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
+    directUserPluginToolProvenance: params.opts.directUserPluginToolProvenance,
   };
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
@@ -451,6 +452,8 @@ export function runAgentAttempt(
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
       onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
+      runtimeProcessCustody: params.opts.runtimeProcessCustody,
+      runtimeExecutionObserver: params.opts.runtimeExecutionObserver,
       lane: params.opts.lane,
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
