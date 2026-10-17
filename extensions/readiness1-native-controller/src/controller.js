@@ -659,42 +659,98 @@ export function createReadinessTool({
           if (!workspaceCreateAdmitted && latest?.state?.gate?.stopRequested === true) {
             return reportContinuationStop(task, latest, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
           }
-          const recoverableBindingDrift = error?.code === 'PRE_LAUNCH_BINDING_DRIFT'
+          const preLaunchDriftWorkspace = error?.code === 'PRE_LAUNCH_BINDING_DRIFT'
             && launchAttempted === false
-            && latest?.revision === record.revision
-            && latest.state.status === 'DISPATCH_RESERVED'
+            && latest?.state.status === 'DISPATCH_RESERVED'
             && latest.state.ticket?.id === ticketId
             && latest.state.ticket.activeId === ticketId
             && !latest.state.writer
-            && !latest.state.gate?.stopRequested
             && !!latest.state.workspace;
+          if (preLaunchDriftWorkspace && latest.state.gate?.stopRequested === true) {
+            return reportContinuationStop(task, latest, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+          }
+          const recoverableBindingDrift = preLaunchDriftWorkspace
+            && latest.revision === record.revision
+            && !latest.state.gate?.stopRequested;
           let preLaunchAbortHandled = false;
           if (recoverableBindingDrift) {
             preLaunchAbortHandled = true;
+            let cleanupAdmitted = false;
             let cleanupReceipt;
             try {
-              cleanupReceipt = await bridge.cleanupWorkspace(task, latest.state.workspace);
+              cleanupReceipt = await bridge.cleanupWorkspace(task, latest.state.workspace, {
+                assertCurrent,
+                admit: async () => {
+                  requireThat(!cleanupAdmitted, 'workspace-cleanup admission replay');
+                  record = await ledger.mutate(task.taskNodeId, latest.revision, (state) => {
+                    requireThat(
+                      !state.gate?.stopRequested
+                        && state.status === 'DISPATCH_RESERVED'
+                        && state.ticket?.id === ticketId
+                        && state.ticket.activeId === ticketId
+                        && state.ticket.state === 'reserved'
+                        && state.workspace?.id === latest.state.workspace.id
+                        && !state.writer
+                        && state.receipt.valid
+                        && now() < state.receipt.expiresAt
+                        && now() < state.contract.deadline
+                        && now() < state.contract.hardSunset,
+                      'workspace-cleanup STOP/drift fence refused',
+                    );
+                    state.history.push({ kind: 'workspace_cleanup_admitted', id: state.workspace.id, at: now() });
+                    return state;
+                  }, assertCurrent);
+                  cleanupAdmitted = true;
+                },
+              });
+              const recovery = await ledger.read(task.taskNodeId, assertCurrent);
+              if (recovery.state.gate?.stopRequested === true) {
+                preLaunchAbortRecovered(recovery.state, { ticketId, cleanupReceipt, now: now() });
+                const stopped = await reportContinuationStop(
+                  task,
+                  recovery,
+                  'STOP_REQUESTED',
+                  'OWNER_DECISION_REQUIRED',
+                );
+                const reported = await ledger.read(task.taskNodeId, assertCurrent);
+                record = await ledger.mutate(
+                  task.taskNodeId,
+                  reported.revision,
+                  (state) => preLaunchAbortRecovered(state, { ticketId, cleanupReceipt, now: now() }),
+                  assertCurrent,
+                );
+                return json({
+                  ...stopped.details,
+                  task: safeRecord(record),
+                  continuation: { ...stopped.details.continuation, current: record.state.status },
+                });
+              }
               record = await ledger.mutate(
                 task.taskNodeId,
-                latest.revision,
+                recovery.revision,
                 (state) => preLaunchAbortRecovered(state, { ticketId, cleanupReceipt, now: now() }),
                 assertCurrent,
               );
             } catch {
-              const unresolved = await ledger.read(task.taskNodeId, assertCurrent);
+              let unresolved = await ledger.read(task.taskNodeId, assertCurrent);
+              if (!cleanupAdmitted && unresolved?.state?.gate?.stopRequested === true) {
+                return reportContinuationStop(task, unresolved, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+              }
               if (
-                unresolved?.revision === latest.revision
-                  && unresolved.state.status === 'DISPATCH_RESERVED'
+                unresolved?.state.status === 'DISPATCH_RESERVED'
                   && unresolved.state.ticket?.activeId === ticketId
                   && !unresolved.state.writer
-                  && !unresolved.state.gate?.stopRequested
               ) {
-                await ledger.mutate(
+                const unknown = await ledger.mutate(
                   task.taskNodeId,
                   unresolved.revision,
                   (state) => preLaunchAbortOutcomeUnknown(state, { ticketId, now: now() }),
                   assertCurrent,
                 ).catch(() => undefined);
+                if (unknown) unresolved = unknown;
+              }
+              if (unresolved?.state?.gate?.stopRequested === true) {
+                return reportContinuationStop(task, unresolved, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
               }
             }
           }

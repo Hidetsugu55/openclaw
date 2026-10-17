@@ -326,6 +326,148 @@ test('pre-launch candidate, descriptor, and pin drift recover only with exact wo
   }
 });
 
+test('gate.cancel before pre-launch drift cleanup admission preserves the workspace and reports fixed Owner STOP', async () => {
+  const reports = [];
+  const cleanupOrder = [];
+  let candidates;
+  let fixture;
+  let cleanupAdmissionReturned = false;
+  let workspaceDeletes = 0;
+  const physicalCleanup = () => {
+    assert.equal(cleanupAdmissionReturned, true, 'fixture cleanup effect ran before admission');
+    cleanupOrder.push('physical-effect');
+    workspaceDeletes += 1;
+  };
+  fixture = gateHarness({
+    async readCapacity() {
+      const value = candidates.get('source');
+      candidates.set('source', { ...value, intent: { ...value.intent, method: 'drifted route' } });
+      return { provider: 'codex', version: '1.0.0', source: 'native-structured', workCalls: 0, capacity: 'available', paidOverflow: 'off' };
+    },
+    async cleanupWorkspace(request) {
+      cleanupOrder.push('cleanup-entered');
+      const reserved = await fixture.ledger.read(contract.taskNodeId, () => {});
+      assert.equal(reserved.state.status, 'DISPATCH_RESERVED');
+      await fixture.tool.execute('cancel-before-drift-cleanup-admission', {
+        action: 'gate.cancel',
+        taskNodeId: contract.taskNodeId,
+        expectedRevision: reserved.revision,
+      });
+      cleanupOrder.push('stop-committed');
+      await request.admitWorkspaceCleanup();
+      cleanupAdmissionReturned = true;
+      cleanupOrder.push('admission-returned');
+      physicalCleanup();
+      return {
+        schema: 'readiness1.finish-receipt.v1', receiptId: 'forbidden-drift-cleanup',
+        taskNodeId: request.taskNodeId, root: request.root, workspaceRemoved: true,
+        releaseConfirmed: true, postRemovalLsofClear: true, auditConfirmed: true, observedAt: 1_000,
+      };
+    },
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  ({ candidates } = fixture);
+  const active = await activateGate(fixture.tool);
+
+  const stopped = (await fixture.tool.execute('pre-launch-drift-cleanup-stop', {
+    action: 'dispatch',
+    taskNodeId: contract.taskNodeId,
+    expectedRevision: active.revision,
+    candidateId: 'source',
+  })).details;
+
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'STOP_REQUESTED');
+  assert.deepEqual(stopped.ownerReport, { delivery: 'sent', readback: true });
+  assert.deepEqual(cleanupOrder, ['cleanup-entered', 'stop-committed']);
+  assert.equal(workspaceDeletes, 0);
+  const held = await fixture.ledger.read(contract.taskNodeId, () => {});
+  assert.equal(held.state.status, 'DISPATCH_RESERVED');
+  assert.equal(held.state.cleanup, 'clear');
+  assert.equal(held.state.reserved, 10);
+  assert.ok(held.state.ticket);
+  assert.ok(held.state.workspace);
+  assert.equal(held.state.gate.stopRequested, true);
+  assert.equal(held.state.history.some((entry) => entry.kind === 'workspace_cleanup_admitted'), false);
+
+  const repeated = (await fixture.tool.execute('pre-launch-drift-cleanup-stop-readback', {
+    action: 'dispatch',
+    taskNodeId: contract.taskNodeId,
+    expectedRevision: stopped.task.revision,
+    candidateId: 'source',
+  })).details;
+  assert.equal(repeated.reason, 'STOP_REQUESTED');
+  assert.deepEqual(repeated.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(workspaceDeletes, 0);
+  assert.equal(reports.length, 1);
+});
+
+test('pre-launch drift cleanup admission linearizes before a later STOP and retains exact cleanup evidence', async () => {
+  const reports = [];
+  const cleanupOrder = [];
+  let candidates;
+  let fixture;
+  let cleanupAdmissionReturned = false;
+  let workspaceDeletes = 0;
+  const physicalCleanup = () => {
+    assert.equal(cleanupAdmissionReturned, true, 'fixture cleanup effect ran before admission');
+    cleanupOrder.push('physical-effect');
+    workspaceDeletes += 1;
+  };
+  fixture = gateHarness({
+    async readCapacity() {
+      const value = candidates.get('source');
+      candidates.set('source', { ...value, intent: { ...value.intent, method: 'drifted route' } });
+      return { provider: 'codex', version: '1.0.0', source: 'native-structured', workCalls: 0, capacity: 'available', paidOverflow: 'off' };
+    },
+    async cleanupWorkspace(request) {
+      await request.admitWorkspaceCleanup();
+      cleanupAdmissionReturned = true;
+      cleanupOrder.push('admission-returned');
+      const admitted = await fixture.ledger.read(contract.taskNodeId, () => {});
+      assert.equal(admitted.state.history.at(-1).kind, 'workspace_cleanup_admitted');
+      await fixture.tool.execute('cancel-after-drift-cleanup-admission', {
+        action: 'gate.cancel',
+        taskNodeId: contract.taskNodeId,
+        expectedRevision: admitted.revision,
+      });
+      cleanupOrder.push('stop-committed');
+      physicalCleanup();
+      return {
+        schema: 'readiness1.finish-receipt.v1', receiptId: 'admitted-drift-cleanup',
+        taskNodeId: request.taskNodeId, root: request.root, workspaceRemoved: true,
+        releaseConfirmed: true, postRemovalLsofClear: true, auditConfirmed: true, observedAt: 1_000,
+      };
+    },
+    sendFixedOwnerDM: async (payload) => { reports.push(payload); return { confirmed: true }; },
+  });
+  ({ candidates } = fixture);
+  const active = await activateGate(fixture.tool);
+
+  const stopped = (await fixture.tool.execute('pre-launch-drift-cleanup-admitted-stop', {
+    action: 'dispatch',
+    taskNodeId: contract.taskNodeId,
+    expectedRevision: active.revision,
+    candidateId: 'source',
+  })).details;
+
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'STOP_REQUESTED');
+  assert.deepEqual(stopped.ownerReport, { delivery: 'sent', readback: true });
+  assert.deepEqual(cleanupOrder, ['admission-returned', 'stop-committed', 'physical-effect']);
+  assert.equal(workspaceDeletes, 1);
+  const recovered = await fixture.ledger.read(contract.taskNodeId, () => {});
+  assert.equal(recovered.state.status, 'CANCELLED');
+  assert.equal(recovered.state.cleanup, 'pass');
+  assert.equal(recovered.state.reserved, 0);
+  assert.equal(recovered.state.ticket, null);
+  assert.equal(recovered.state.gate.stopRequested, true);
+  assert.equal(recovered.state.finishReceipt?.receiptId, 'admitted-drift-cleanup');
+  assert.ok(recovered.state.history.some((entry) => entry.kind === 'workspace_cleanup_admitted'));
+  assert.ok(recovered.state.history.some((entry) => entry.kind === 'pre_launch_abort_recovered'));
+  assert.equal(reports.length, 1);
+});
+
 test('pre-launch binding drift with uncertain cleanup is sticky OUTCOME_UNKNOWN', async () => {
   let candidates;
   let cleanupAttempts = 0;
