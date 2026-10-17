@@ -1,20 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createAcceptanceExecutor,
-  createFixtureAcceptanceExecutor,
-} from "../src/acceptance.js";
+import { createAcceptanceExecutor } from "../src/acceptance.js";
 import { ACCEPTANCE_ROWS } from "../src/contract.js";
 import { memoryStore } from "./helpers.mjs";
 
 const unknownFixtureSource = Object.freeze({
   status: "UNKNOWN",
-  blocker: "TRUSTED_SOURCE_DESCRIPTOR_REQUIRED",
+  blocker: "TRUSTED_SOURCE_ATTESTATION_UNAVAILABLE",
 });
 
 test("A01-A19 executor publishes measured BLOCK and never synthetic PASS", async () => {
   const store = memoryStore();
-  const executor = createFixtureAcceptanceExecutor({
+  const executor = createAcceptanceExecutor({
     publicationStore: store,
     getConfig: () => ({
       gateway: { auth: { mode: "token" }, nodes: { pairing: { autoApproveLocal: false } } },
@@ -43,7 +40,7 @@ test("A01-A19 executor publishes measured BLOCK and never synthetic PASS", async
 
 test("acceptance publisher is idempotent only for exact evidence", async () => {
   const store = memoryStore();
-  const executor = createFixtureAcceptanceExecutor({
+  const executor = createAcceptanceExecutor({
     publicationStore: store,
     getConfig: () => ({}),
     now: () => 100,
@@ -51,7 +48,7 @@ test("acceptance publisher is idempotent only for exact evidence", async () => {
   const request = { runId: "20261014T120000Z-idempotent", assertCurrent() {} };
   await executor.execute(request);
   await executor.execute(request);
-  const changed = createFixtureAcceptanceExecutor({
+  const changed = createAcceptanceExecutor({
     publicationStore: store,
     getConfig: () => ({}),
     now: () => 101,
