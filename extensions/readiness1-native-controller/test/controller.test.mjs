@@ -526,6 +526,72 @@ test('continuation STOP blocks both RUNNING observation and pending cleanup', as
   assert.equal(cleanupReports.length, 1);
 });
 
+test('direct lifecycle actions honour STOP with Owner readback before any work', async () => {
+  const dispatchReports = [];
+  const dispatch = makeTool({
+    sendFixedOwnerDM: async (payload) => { dispatchReports.push(payload); return { confirmed: true }; },
+  });
+  const dispatchActive = await activate(dispatch.tool);
+  const dispatchStopped = await dispatch.ledger.mutate(contract.taskNodeId, dispatchActive.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_before_direct_dispatch', at: 1_000 });
+    return state;
+  }, () => {});
+  const directDispatch = (await dispatch.tool.execute('direct-dispatch-stop', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: dispatchStopped.revision,
+  })).details;
+  assert.equal(directDispatch.reason, 'STOP_REQUESTED');
+  assert.deepEqual(directDispatch.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(dispatch.calls.some(([name]) => ['provider.work', 'worktree.create'].includes(name)), false);
+  assert.equal(dispatchReports.length, 1);
+
+  const observeReports = [];
+  const observe = makeTool({
+    sendFixedOwnerDM: async (payload) => { observeReports.push(payload); return { confirmed: true }; },
+  });
+  let observeTask = await activate(observe.tool);
+  observeTask = (await observe.tool.execute('dispatch-direct-observe-stop', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: observeTask.revision,
+  })).details.task;
+  const observeStopped = await observe.ledger.mutate(contract.taskNodeId, observeTask.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_before_direct_observe', at: 1_000 });
+    return state;
+  }, () => {});
+  const directObserve = (await observe.tool.execute('direct-observe-stop', {
+    action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: observeStopped.revision,
+  })).details;
+  assert.equal(directObserve.reason, 'STOP_REQUESTED');
+  assert.deepEqual(directObserve.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(observe.calls.filter(([name]) => name === 'native.observe').length, 0);
+  assert.equal(observeReports.length, 1);
+
+  const cleanupReports = [];
+  const cleanup = makeTool({
+    sendFixedOwnerDM: async (payload) => { cleanupReports.push(payload); return { confirmed: true }; },
+  });
+  let cleanupTask = await activate(cleanup.tool);
+  cleanupTask = (await cleanup.tool.execute('dispatch-direct-cleanup-stop', {
+    action: 'dispatch', taskNodeId: contract.taskNodeId, expectedRevision: cleanupTask.revision,
+  })).details.task;
+  cleanupTask = (await cleanup.tool.execute('observe-direct-cleanup-stop', {
+    action: 'observe', taskNodeId: contract.taskNodeId, expectedRevision: cleanupTask.revision,
+  })).details.task;
+  const cleanupStopped = await cleanup.ledger.mutate(contract.taskNodeId, cleanupTask.revision, (state) => {
+    state.gate = { operations: [], refusals: [], omissions: [], requests: [], stopRequested: true };
+    state.history.push({ kind: 'fixture_stop_before_direct_cleanup', at: 1_000 });
+    return state;
+  }, () => {});
+  const removalsBefore = cleanup.calls.filter(([name]) => name === 'worktree.remove').length;
+  const directCleanup = (await cleanup.tool.execute('direct-cleanup-stop', {
+    action: 'cleanup', taskNodeId: contract.taskNodeId, expectedRevision: cleanupStopped.revision,
+  })).details;
+  assert.equal(directCleanup.reason, 'STOP_REQUESTED');
+  assert.deepEqual(directCleanup.ownerReport, { delivery: 'sent', readback: true });
+  assert.equal(cleanup.calls.filter(([name]) => name === 'worktree.remove').length, removalsBefore);
+  assert.equal(cleanupReports.length, 1);
+});
+
 test('same continuation reason with a distinct durable checkpoint receives a distinct Owner report', async () => {
   const reports = [];
   const { tool, ledger, calls } = makeTool({

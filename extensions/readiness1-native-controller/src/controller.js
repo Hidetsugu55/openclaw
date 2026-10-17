@@ -21,6 +21,7 @@ export const TOOL_ACTIONS = Object.freeze([
   'approval.request', 'activate', 'status', 'dispatch', 'observe', 'cleanup',
   'capacity.resume', ...COORDINATION_ACTIONS, 'notify.owner', 'acceptance.run',
 ]);
+const LIFECYCLE_ACTIONS = Object.freeze(['dispatch', 'observe', 'cleanup']);
 const FIXTURE_TOOL_ACTIONS = Object.freeze([
   ...new Set([...TOOL_ACTIONS, ...READ_ACTIONS, ...GATE_ACTIONS, 'continuation.reconcile']),
 ]);
@@ -137,10 +138,11 @@ export function createReadinessTool({
     return task;
   }
 
-  async function currentAuthority(task, expectedRevision) {
+  async function currentAuthority(task, expectedRevision, { allowStopped = false } = {}) {
     const record = await ledger.read(task.taskNodeId, assertCurrent);
     requireThat(record?.state && record.revision === expectedRevision, 'canonical Task revision conflict');
     requireThat(equal(record.state.contract, task) && record.state.scopeHash === scopeHash(task), 'canonical Task revision/scope drift');
+    if (allowStopped && record.state.gate?.stopRequested === true) return record;
     requireThat(record.state.receipt.valid === true && now() < record.state.receipt.expiresAt && now() < task.deadline && now() < task.hardSunset, 'authority expired/revoked');
     return record;
   }
@@ -490,7 +492,13 @@ export function createReadinessTool({
       }
 
       requireThat(Number.isSafeInteger(params.expectedRevision), `${action} requires expectedRevision`);
-      let record = await currentAuthority(task, params.expectedRevision);
+      let record = await currentAuthority(task, params.expectedRevision, {
+        allowStopped: LIFECYCLE_ACTIONS.includes(action),
+      });
+
+      if (LIFECYCLE_ACTIONS.includes(action) && record.state.gate?.stopRequested === true) {
+        return reportContinuationStop(task, record, 'STOP_REQUESTED', 'OWNER_DECISION_REQUIRED');
+      }
 
       if (action === 'capacity.resume') {
         exactArgs(params, ['action', 'taskNodeId', 'expectedRevision'], ['taskNodeId', 'expectedRevision']);
